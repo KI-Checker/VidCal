@@ -537,6 +537,17 @@ class VidCal(tk.Tk):
                   selectbackground=[("readonly","#1a2a3a")],
                   selectforeground=[("readonly","#4fc3f7")])
 
+        # ── Menüleiste mit Log-Button ──
+        menubar = tk.Frame(self, bg="#2d2d2d", height=28)
+        menubar.pack(fill="x", side="top")
+        tk.Button(menubar, text="📋 Log", command=self._show_log,
+                  bg="#2d2d2d", fg="#4ec9b0", relief="flat",
+                  font=("Segoe UI", 9), padx=10).pack(side="right")
+        tk.Button(menubar, text="🗑 Log leeren", command=self._clear_log,
+                  bg="#2d2d2d", fg="#888", relief="flat",
+                  font=("Segoe UI", 9), padx=10).pack(side="right")
+        self._log_entries = []   # globaler Log-Buffer
+
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -747,6 +758,122 @@ class VidCal(tk.Tk):
         else:
             self._tb_seq_btn.config(state="disabled", bg="#444", fg="#888")
 
+    # ── Log ─────────────────────────────────────────────────────────────────
+
+    def _log(self, msg, level="INFO"):
+        """Schreibt einen Eintrag in den Log-Buffer."""
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%H:%M:%S")
+        entry = f"[{ts}] [{level}] {msg}"
+        self._log_entries.append(entry)
+        # Log-Fenster live updaten falls offen
+        if hasattr(self, '_log_text') and self._log_text.winfo_exists():
+            self._log_text.config(state="normal")
+            color = {"INFO":"#d4d4d4","OK":"#4ec9b0","WARN":"#ff9900","ERR":"#f44747"}.get(level,"#d4d4d4")
+            self._log_text.insert("end", entry + "\n", level)
+            self._log_text.tag_configure(level, foreground=color)
+            self._log_text.see("end")
+            self._log_text.config(state="disabled")
+
+    def _show_log(self):
+        """Öffnet das Log-Fenster (oder bringt es in den Vordergrund)."""
+        if hasattr(self, '_log_win') and self._log_win.winfo_exists():
+            self._log_win.lift()
+            return
+        win = tk.Toplevel(self)
+        win.title("📋 VidCal — Log")
+        win.configure(bg="#1e1e1e")
+        win.geometry("860x480")
+        self._log_win = win
+
+        toolbar = tk.Frame(win, bg="#2d2d2d")
+        toolbar.pack(fill="x")
+        tk.Button(toolbar, text="🗑 Leeren", command=self._clear_log,
+                  bg="#2d2d2d", fg="#888", relief="flat", padx=8, pady=3).pack(side="left")
+        tk.Button(toolbar, text="💾 Speichern", command=self._save_log,
+                  bg="#2d2d2d", fg="#d4d4d4", relief="flat", padx=8, pady=3).pack(side="left")
+        tk.Label(toolbar, text="Alle FFmpeg-Ausgaben + Fehler werden hier angezeigt",
+                 bg="#2d2d2d", fg="#666", font=("Segoe UI", 8)).pack(side="right", padx=8)
+
+        self._log_text = tk.Text(win, bg="#0d0d0d", fg="#d4d4d4",
+                                  font=("Consolas", 8), wrap="none", state="disabled")
+        self._log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        sb_v = ttk.Scrollbar(win, command=self._log_text.yview)
+        self._log_text.configure(yscrollcommand=sb_v.set)
+        sb_h = ttk.Scrollbar(win, orient="horizontal", command=self._log_text.xview)
+        self._log_text.configure(xscrollcommand=sb_h.set)
+
+        # Bestehende Einträge einfügen
+        self._log_text.config(state="normal")
+        for entry in self._log_entries:
+            level = "INFO"
+            for lv in ("ERR","WARN","OK"):
+                if f"[{lv}]" in entry:
+                    level = lv
+                    break
+            color = {"INFO":"#d4d4d4","OK":"#4ec9b0","WARN":"#ff9900","ERR":"#f44747"}.get(level,"#d4d4d4")
+            self._log_text.insert("end", entry + "\n", level)
+            self._log_text.tag_configure(level, foreground=color)
+        self._log_text.see("end")
+        self._log_text.config(state="disabled")
+
+    def _clear_log(self):
+        self._log_entries.clear()
+        if hasattr(self, '_log_text') and self._log_text.winfo_exists():
+            self._log_text.config(state="normal")
+            self._log_text.delete("1.0", "end")
+            self._log_text.config(state="disabled")
+
+    def _save_log(self):
+        from tkinter import filedialog as _fd
+        path = _fd.asksaveasfilename(defaultextension=".txt",
+            filetypes=[("Textdatei","*.txt")], title="Log speichern")
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(self._log_entries))
+
+    def _run_ffmpeg_logged(self, cmd, label="FFmpeg"):
+        """
+        Führt einen FFmpeg-Befehl aus und schreibt stdout+stderr live ins Log.
+        Gibt den Popen-Prozess zurück.
+        """
+        self._log(f"START: {label}", "INFO")
+        self._log(f"CMD: {cmd}", "INFO")
+        try:
+            proc = subprocess.Popen(
+                cmd, shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
+            )
+
+            def reader():
+                for raw_line in iter(proc.stdout.readline, b''):
+                    line = raw_line.decode("utf-8", errors="replace").rstrip()
+                    if not line:
+                        continue
+                    # Fehler-Keywords erkennen
+                    lo = line.lower()
+                    if any(k in lo for k in ["error","invalid","failed","no such","cannot","unable"]):
+                        level = "ERR"
+                    elif any(k in lo for k in ["warning","warn"]):
+                        level = "WARN"
+                    else:
+                        level = "INFO"
+                    self.after(0, lambda l=line, lv=level: self._log(l, lv))
+                rc = proc.wait()
+                if rc == 0:
+                    self.after(0, lambda: self._log(f"DONE: {label} (exit 0)", "OK"))
+                else:
+                    self.after(0, lambda: self._log(f"FEHLER: {label} (exit {rc})", "ERR"))
+
+            threading.Thread(target=reader, daemon=True).start()
+            return proc
+
+        except Exception as e:
+            self._log(f"EXCEPTION: {e}", "ERR")
+            return None
+
     def _stop_output(self):
         """Stoppt laufenden FFmpeg-Ausgabeprozess."""
         if self._output_proc and self._output_proc.poll() is None:
@@ -842,6 +969,7 @@ class VidCal(tk.Tk):
             return
 
         self._tb_stop_btn.config(state="normal")
+        self._show_log()  # Log-Fenster automatisch öffnen
 
         def run_sequence():
             import tempfile, time
@@ -857,12 +985,10 @@ class VidCal(tk.Tk):
                 cmd, _ = self._build_ffmpeg_output_cmd(tmp.name, device_name, device_type, res, fps)
                 # Begrenzter Loop: duration Sekunden
                 timed_cmd = cmd.replace("-loop 1", f"-t {duration} -loop 1")
-                proc = subprocess.Popen(
-                    timed_cmd, shell=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
-                )
+                proc = self._run_ffmpeg_logged(timed_cmd, f"Sequenz: {name}")
                 self._output_proc = proc
-                proc.wait()
+                if proc:
+                    proc.wait()
                 try:
                     os.unlink(tmp.name)
                 except:
@@ -1069,11 +1195,9 @@ class VidCal(tk.Tk):
             "3. LUT generieren → Farbkorrektur fertig"
         )
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
-            self._stop_output()  # vorherigen Prozess stoppen
-            self._output_proc = subprocess.Popen(
-                cmd, shell=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
-            )
+            self._stop_output()
+            self._show_log()   # Log-Fenster automatisch öffnen
+            self._output_proc = self._run_ffmpeg_logged(cmd, f"Testbild → {device_name}")
             self._tb_stop_btn.config(state="normal")
             self._tb_output_status.config(
                 text=f"▶ Ausgabe läuft → {device_name} ({res})   [⏹ Stop zum Beenden]")
