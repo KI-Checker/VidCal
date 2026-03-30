@@ -403,6 +403,60 @@ def generate_avisynth_script(device_name, lut_path, output_avi, gamma,
 # Testbild-Vorschau & Analyse
 # ─────────────────────────────────────────────────────────────────────────────
 
+def enumerate_video_devices():
+    """
+    Listet alle DirectShow Video-Geräte via FFmpeg auf.
+    Findet: Capture-Karten (Blackmagic, Magewell etc.),
+            IEEE 1394 / FireWire Geräte, USB-Capture, VirtualCam.
+    Gibt sortierte Liste von Gerätenamen zurück.
+    """
+    devices = []
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True, text=True, timeout=8
+        )
+        # FFmpeg schreibt Geräteliste nach stderr
+        output = result.stderr
+        in_video = False
+        for line in output.splitlines():
+            # Abschnitt "DirectShow video devices"
+            if "DirectShow video devices" in line:
+                in_video = True
+                continue
+            if "DirectShow audio devices" in line:
+                in_video = False
+                continue
+            if in_video:
+                # Zeilen wie: [dshow @ ...] "Gerätename"
+                import re
+                m = re.search(r'"([^"]+)"', line)
+                if m and "Alternative name" not in line:
+                    name = m.group(1)
+                    # Typ-Kennzeichnung ergänzen
+                    lower = name.lower()
+                    if any(k in lower for k in ["1394", "firewire", "dv", "ohci"]):
+                        label = f"[IEEE 1394]  {name}"
+                    elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink"]):
+                        label = f"[Blackmagic]  {name}"
+                    elif any(k in lower for k in ["gv-usb", "gvusb"]):
+                        label = f"[I/O Data]  {name}"
+                    elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
+                        label = f"[Elgato]  {name}"
+                    elif any(k in lower for k in ["virtual", "obs", "vcam"]):
+                        label = f"[VirtualCam]  {name}"
+                    elif any(k in lower for k in ["magewell", "aja", "matrox"]):
+                        label = f"[Pro Capture]  {name}"
+                    else:
+                        label = f"[DirectShow]  {name}"
+                    devices.append(label)
+    except FileNotFoundError:
+        # FFmpeg nicht gefunden
+        devices = []
+    except Exception:
+        devices = []
+    return devices
+
 def frame_to_photoimage(frame_bgr, max_w=900):
     from PIL import Image, ImageTk
     h, w = frame_bgr.shape[:2]
@@ -484,20 +538,39 @@ class VidCal(tk.Tk):
         self._tb_res.grid(row=row, column=1, padx=4, pady=4, sticky="w")
         row += 1
 
+        # Ausgabe-Gerät
+        tk.Label(f, text="Ausgabe-Gerät:", bg="#1e1e1e", fg="#d4d4d4").grid(
+            row=row, column=0, padx=12, pady=4, sticky="w")
+        self._tb_device_var = tk.StringVar(value="— Geräte werden geladen… —")
+        self._tb_device_cb = ttk.Combobox(f, textvariable=self._tb_device_var,
+                                           state="readonly", width=46)
+        self._tb_device_cb.grid(row=row, column=1, padx=4, pady=4, sticky="w")
+        tk.Button(f, text="🔄", command=self._refresh_devices,
+                  bg="#3c3c3c", fg="white", relief="flat", width=3).grid(row=row, column=2, padx=4)
+        row += 1
+
         btn_frame = tk.Frame(f, bg="#1e1e1e")
         btn_frame.grid(row=row, column=0, columnspan=3, padx=10, pady=8, sticky="w")
         tk.Button(btn_frame, text="▶ Vorschau", command=self._preview_testbild,
                   bg="#007acc", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
         tk.Button(btn_frame, text="💾 Als PNG speichern", command=self._save_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="📤 Für Capture-Board ausgeben (DirectShow)", command=self._output_testbild,
+        tk.Button(btn_frame, text="📤 An Capture-Board ausgeben", command=self._output_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        row += 1
+
+        self._tb_output_status = tk.Label(f, text="", bg="#1e1e1e", fg="#4ec9b0",
+                                           font=("Segoe UI", 10))
+        self._tb_output_status.grid(row=row, column=0, columnspan=3, padx=12, sticky="w")
         row += 1
 
         self._tb_canvas = tk.Label(f, bg="#111", relief="flat")
         self._tb_canvas.grid(row=row, column=0, columnspan=3, padx=10, pady=8, sticky="nsew")
         f.rowconfigure(row, weight=1)
         f.columnconfigure(2, weight=1)
+
+        # Geräte beim Start laden
+        self.after(300, self._refresh_devices)
 
     def _get_testbild_frame(self):
         mode = self._tb_mode.get()
@@ -531,14 +604,71 @@ class VidCal(tk.Tk):
             cv2.imwrite(path, frame)
             messagebox.showinfo("Gespeichert", f"Testbild gespeichert:\n{path}")
 
+    def _refresh_devices(self):
+        """Erkennt alle DirectShow Video-Geräte (inkl. IEEE 1394 / FireWire) via FFmpeg."""
+        self._tb_output_status.config(text="⏳ Suche Capture-Geräte…")
+        self.update_idletasks()
+
+        def worker():
+            devices = enumerate_video_devices()
+            def update():
+                if devices:
+                    self._tb_device_cb["values"] = devices
+                    self._tb_device_cb.current(0)
+                    self._tb_output_status.config(
+                        text=f"✅ {len(devices)} Gerät(e) gefunden")
+                else:
+                    self._tb_device_cb["values"] = ["(kein Gerät gefunden)"]
+                    self._tb_device_cb.current(0)
+                    self._tb_output_status.config(
+                        text="⚠️  Keine DirectShow-Geräte gefunden — FFmpeg installiert?")
+            self.after(0, update)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _output_testbild(self):
-        messagebox.showinfo("Ausgabe",
-            "Testbild-Ausgabe über DirectShow / VirtualCam:\n\n"
-            "1. OBS Virtual Camera oder VirtualCam installieren\n"
-            "2. Testbild als PNG laden\n"
-            "3. Als Virtual Camera ausgeben\n"
-            "4. Im Capture-Tool als Quelle wählen\n\n"
-            "Alternativ: Testbild auf Band vorhanden → direkt einspielen.")
+        """Gibt das aktuelle Testbild als Vollbild-Loop an das gewählte Capture-Gerät aus."""
+        frame = self._get_testbild_frame()
+        device = self._tb_device_var.get()
+        if not device or "kein Gerät" in device or "geladen" in device:
+            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein Ausgabe-Gerät wählen.\n"
+                "Klicke 🔄 um Geräte neu zu suchen.")
+            return
+
+        # Testbild als temporäre PNG speichern
+        tmp_png = os.path.join(os.path.dirname(sys.executable)
+                               if getattr(sys, 'frozen', False) else os.getcwd(),
+                               "vidcal_testbild_tmp.png")
+        cv2.imwrite(tmp_png, frame)
+
+        # FFmpeg-Befehl: Bild als Endlosschleife an DirectShow-Gerät
+        # (benötigt FFmpeg + z.B. OBS Virtual Camera oder einen VirtualCam-Treiber als Ausgabe)
+        cmd = (
+            f'ffmpeg -loop 1 -re -i "{tmp_png}" '
+            f'-f dshow -video_size 1920x1080 '
+            f'-vcodec rawvideo -pix_fmt yuyv422 '
+            f'-y "video={device}"'
+        )
+
+        info = (
+            f"Gerät: {device}\n\n"
+            f"FFmpeg-Befehl (wird in separatem Fenster ausgeführt):\n"
+            f"{cmd}\n\n"
+            "Hinweis: Das Bild wird als Endlosschleife ausgegeben.\n"
+            "Fenster schließen zum Stoppen.\n\n"
+            "⚠️  Für Ausgabe an physische Capture-Karten (Blackmagic, IEEE 1394)\n"
+            "wird ein VirtualCam- oder Loopback-Treiber benötigt\n"
+            "(z.B. OBS Virtual Camera, VirtualCam, DirectShow Filter)."
+        )
+        if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
+            threading.Thread(
+                target=lambda: subprocess.Popen(
+                    cmd, shell=True,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform=="win32" else 0
+                ),
+                daemon=True
+            ).start()
+            self._tb_output_status.config(text=f"▶ Ausgabe läuft → {device}")
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
