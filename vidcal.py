@@ -417,6 +417,30 @@ def find_ffmpeg():
         return str(bundled)
     return "ffmpeg"  # Fallback: System-PATH
 
+_ffmpeg_formats_cache = None
+
+def get_ffmpeg_formats():
+    """Gibt die Liste der verfügbaren FFmpeg Output-Formate zurück (gecacht)."""
+    global _ffmpeg_formats_cache
+    if _ffmpeg_formats_cache is not None:
+        return _ffmpeg_formats_cache
+    try:
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(
+            [find_ffmpeg(), "-formats"],
+            capture_output=True, text=True, timeout=8, **kwargs
+        )
+        _ffmpeg_formats_cache = result.stdout + result.stderr
+    except Exception:
+        _ffmpeg_formats_cache = ""
+    return _ffmpeg_formats_cache
+
+def ffmpeg_has_format(fmt):
+    """Prüft ob FFmpeg ein bestimmtes Format/Muxer unterstützt."""
+    return fmt in get_ffmpeg_formats()
+
 def enumerate_video_devices():
     """
     Listet alle DirectShow Video-Geräte via FFmpeg auf.
@@ -891,13 +915,22 @@ class VidCal(tk.Tk):
         ffmpeg = find_ffmpeg()
 
         if "Blackmagic" in device_type or "decklink" in device_name.lower():
-            # Blackmagic DeckLink: nativer decklink-Output-Treiber
-            return (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-f decklink -s {res} -r {fps} '
-                f'-pix_fmt uyvy422 '
-                f'"{device_name}"'
-            ), "Blackmagic DeckLink Output"
+            if ffmpeg_has_format("decklink"):
+                # Nativer DeckLink-Treiber (benötigt FFmpeg mit Blackmagic SDK)
+                return (
+                    f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                    f'-f decklink -s {res} -r {fps} '
+                    f'-pix_fmt uyvy422 '
+                    f'"{device_name}"'
+                ), "Blackmagic DeckLink Output"
+            else:
+                # Fallback: DirectShow über Blackmagic WDM-Treiber
+                return (
+                    f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                    f'-vf "scale={res},fps={fps},format=uyvy422" '
+                    f'-f dshow -vcodec rawvideo -pix_fmt uyvy422 '
+                    f'-y "video={device_name}"'
+                ), "Blackmagic WDM (DirectShow Fallback — kein DeckLink SDK)"
 
         elif "IEEE 1394" in device_type:
             # IEEE 1394 / FireWire auf Windows:
@@ -1197,6 +1230,16 @@ class VidCal(tk.Tk):
             "2. Band abspielen → Frame in VidCal laden → Analyse\n"
             "3. LUT generieren → Farbkorrektur fertig"
         )
+        # Warnung wenn DeckLink-SDK fehlt
+        if "Blackmagic" in device_type and not ffmpeg_has_format("decklink"):
+            info += (
+                "\n\n⚠️  DeckLink-SDK nicht im gebündelten FFmpeg!\n"
+                "Fallback: DirectShow (WDM-Treiber).\n"
+                "Für nativen DeckLink-Output: FFmpeg mit --enable-decklink\n"
+                "von https://www.gyan.dev/ffmpeg/builds/ (full_build) installieren\n"
+                "und in C:\\Program Files (x86)\\VidCal\\ffmpeg\\ ersetzen."
+            )
+
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
             self._stop_output()
             self._show_log()   # Log-Fenster automatisch öffnen
