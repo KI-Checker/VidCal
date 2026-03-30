@@ -438,39 +438,44 @@ def enumerate_video_devices():
         # FFmpeg schreibt Geräteliste nach stderr
         raw = result.stderr.decode("utf-8", errors="replace")
 
-        in_video = False
         for line in raw.splitlines():
+            # "Alternative name" immer überspringen
+            if "Alternative name" in line:
+                continue
+
+            # FFmpeg <6: "[dshow @ ...]" mit Sektionsüberschriften
+            # FFmpeg 8+:  "[in#0 @ ...]  "Gerätename" (video)" oder "(audio, video)"
+            # Wir erkennen Video-Geräte an: Zeile enthält "(video)" — egal welches Format
+            is_video_line = (
+                ("(video)" in line or "(audio, video)" in line)
+                and ("@device" not in line)
+            )
+            # Älteres Format: in Sektion "DirectShow video devices", kein (video)-Tag
             if "DirectShow video devices" in line:
-                in_video = True
-                continue
-            if "DirectShow audio devices" in line or "DirectShow video+audio devices" in line:
-                # video+audio Geräte auch erfassen
-                if "video+audio" in line:
-                    in_video = True
+                continue  # Überschrift selbst überspringen
+
+            m = re.search(r'"([^"@][^"]*)"', line)
+            if m and is_video_line:
+                name = m.group(1).strip()
+                if not name:
+                    continue
+                lower = name.lower()
+                if any(k in lower for k in ["1394", "firewire", "dv camera", "dv vcr", "ohci", "msdv", "microsoft dv"]):
+                    label = f"[IEEE 1394]  {name}"
+                elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink"]):
+                    label = f"[Blackmagic]  {name}"
+                elif any(k in lower for k in ["gv-usb", "gvusb"]):
+                    label = f"[I/O Data]  {name}"
+                elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
+                    label = f"[Elgato]  {name}"
+                elif any(k in lower for k in ["vmix", "ndi", "virtual", "obs", "vcam", "loopback"]):
+                    label = f"[Virtual/NDI]  {name}"
+                elif any(k in lower for k in ["magewell", "aja", "matrox"]):
+                    label = f"[Pro Capture]  {name}"
                 else:
-                    in_video = False
-                continue
-            if in_video:
-                m = re.search(r'"([^"]+)"', line)
-                if m and "Alternative name" not in line and "@device" not in line:
-                    name = m.group(1)
-                    lower = name.lower()
-                    if any(k in lower for k in ["1394", "firewire", "dv", "ohci", "msdv"]):
-                        label = f"[IEEE 1394]  {name}"
-                    elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink"]):
-                        label = f"[Blackmagic]  {name}"
-                    elif any(k in lower for k in ["gv-usb", "gvusb"]):
-                        label = f"[I/O Data]  {name}"
-                    elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
-                        label = f"[Elgato]  {name}"
-                    elif any(k in lower for k in ["virtual", "obs", "vcam", "loopback"]):
-                        label = f"[VirtualCam]  {name}"
-                    elif any(k in lower for k in ["magewell", "aja", "matrox"]):
-                        label = f"[Pro Capture]  {name}"
-                    else:
-                        label = f"[DirectShow]  {name}"
-                    if label not in devices:
-                        devices.append(label)
+                    label = f"[DirectShow]  {name}"
+                if label not in devices:
+                    devices.append(label)
 
     except FileNotFoundError:
         raw = f"FEHLER: FFmpeg nicht gefunden unter: {ffmpeg}"
