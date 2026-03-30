@@ -590,16 +590,30 @@ class VidCal(tk.Tk):
                   bg="#3c3c3c", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         row += 1
 
-        # Sequenz-Dauer
-        tk.Label(f, text="Sequenzdauer:", bg="#1e1e1e", fg="#d4d4d4").grid(
-            row=row, column=0, padx=12, pady=4, sticky="w")
-        seq_frame = tk.Frame(f, bg="#1e1e1e")
-        seq_frame.grid(row=row, column=1, padx=4, pady=4, sticky="w")
-        self._tb_seq_dur = ttk.Combobox(seq_frame, values=["5", "10", "15", "20", "30"],
-                                         state="normal", width=6)
+        # Sequenz-Aktivierung + Dauer
+        seq_row_frame = tk.Frame(f, bg="#1e1e1e")
+        seq_row_frame.grid(row=row, column=0, columnspan=3, padx=10, pady=4, sticky="w")
+
+        self._tb_seq_enabled = tk.BooleanVar(value=False)
+        self._tb_seq_check = tk.Checkbutton(
+            seq_row_frame, text="Sequenz aktivieren",
+            variable=self._tb_seq_enabled,
+            command=self._toggle_seq_controls,
+            bg="#1e1e1e", fg="#d4d4d4", selectcolor="#3c3c3c",
+            activebackground="#1e1e1e", activeforeground="white",
+            font=("Segoe UI", 10))
+        self._tb_seq_check.pack(side="left", padx=(0, 16))
+
+        tk.Label(seq_row_frame, text="Dauer pro Bild:",
+                 bg="#1e1e1e", fg="#888").pack(side="left")
+        self._tb_seq_dur = ttk.Combobox(seq_row_frame,
+                                         values=["5", "10", "15", "20", "30"],
+                                         state="disabled", width=5)
         self._tb_seq_dur.set("10")
-        self._tb_seq_dur.pack(side="left")
-        tk.Label(seq_frame, text="Sek. pro Bild", bg="#1e1e1e", fg="#d4d4d4").pack(side="left", padx=6)
+        self._tb_seq_dur.pack(side="left", padx=4)
+        self._tb_seq_dur_label = tk.Label(seq_row_frame, text="Sek.",
+                                           bg="#1e1e1e", fg="#888")
+        self._tb_seq_dur_label.pack(side="left")
         row += 1
 
         btn_frame = tk.Frame(f, bg="#1e1e1e")
@@ -610,8 +624,10 @@ class VidCal(tk.Tk):
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
         tk.Button(btn_frame, text="📤 Ausgeben", command=self._output_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="🔁 Alle Testbilder ausgeben", command=self._output_all_testbilder,
-                  bg="#5a3e8a", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        self._tb_seq_btn = tk.Button(btn_frame, text="🔁 Sequenz starten",
+                  command=self._output_all_testbilder,
+                  bg="#444", fg="#888", relief="flat", padx=12, pady=4, state="disabled")
+        self._tb_seq_btn.pack(side="left", padx=4)
         self._tb_stop_btn = tk.Button(btn_frame, text="⏹ Stop", command=self._stop_output,
                   bg="#8b0000", fg="white", relief="flat", padx=12, pady=4, state="disabled")
         self._tb_stop_btn.pack(side="left", padx=4)
@@ -632,6 +648,7 @@ class VidCal(tk.Tk):
 
         # Geräte beim Start laden
         self.after(300, self._refresh_devices)
+        self.after(400, self._toggle_seq_controls)
 
     def _get_testbild_frame(self):
         mode = self._tb_mode.get()
@@ -706,6 +723,19 @@ class VidCal(tk.Tk):
         txt.config(state="disabled")
         sb = ttk.Scrollbar(win, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)
+
+    def _toggle_seq_controls(self):
+        """Aktiviert/deaktiviert Sequenz-Steuerelemente je nach Checkbox."""
+        enabled = self._tb_seq_enabled.get()
+        state = "normal" if enabled else "disabled"
+        fg_active = "#d4d4d4"
+        fg_inactive = "#888"
+        self._tb_seq_dur.config(state=state)
+        self._tb_seq_dur_label.config(fg=fg_active if enabled else fg_inactive)
+        if enabled:
+            self._tb_seq_btn.config(state="normal", bg="#5a3e8a", fg="white")
+        else:
+            self._tb_seq_btn.config(state="disabled", bg="#444", fg="#888")
 
     def _stop_output(self):
         """Stoppt laufenden FFmpeg-Ausgabeprozess."""
@@ -864,9 +894,21 @@ class VidCal(tk.Tk):
         tab_video = ttk.Frame(notebook)
         notebook.add(tab_video, text="📹 Videoformat")
 
+        # Auflösung aus Haupttab übernehmen (hat immer Vorrang)
+        res_str = self._tb_res.get()
+        res_map = {
+            "1920×1080": "1920x1080", "1280×720": "1280x720",
+            "720×576 (PAL)": "720x576", "720×480 (NTSC)": "720x480",
+        }
+        current_res = res_map.get(res_str, "1920x1080")
+        fps_map = {"720×480 (NTSC)": "29.97"}
+        current_fps = fps_map.get(res_str, "25")
+
         params = [
-            ("Auflösung",        "resolution",   ["1920x1080", "1280x720", "720x576", "720x480", "1024x576", "768x576"]),
-            ("Framerate",        "framerate",     ["25", "29.97", "30", "50", "59.94", "60", "23.976", "24"]),
+            ("Auflösung  ⬅ aus Haupttab", "resolution",
+             [current_res, "1920x1080", "1280x720", "720x576", "720x480", "1024x576", "768x576"]),
+            ("Framerate", "framerate",
+             [current_fps, "25", "29.97", "30", "50", "59.94", "60", "23.976", "24"]),
             ("Pixelformat",      "pixel_format",  ["yuyv422", "uyvy422", "nv12", "yuv420p", "rgb24", "bgr24"]),
             ("Scan-Typ",         "scan_type",     ["Interlaced TFF", "Interlaced BFF", "Progressiv"]),
             ("Farbbereich",      "color_range",   ["TV (16-235)", "PC / Full Range (0-255)"]),
