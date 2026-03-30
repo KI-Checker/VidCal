@@ -762,7 +762,7 @@ class VidCal(tk.Tk):
         self._dev_cmd_text.pack(fill="both", expand=True, padx=8, pady=8)
 
         def update_cmd(*_):
-            res   = self._dev_params["resolution"].get()
+            res   = self._dev_params["resolution"].get().replace("×","x")
             fps   = self._dev_params["framerate"].get()
             pxfmt = self._dev_params["pixel_format"].get()
             ffmpeg = find_ffmpeg()
@@ -817,24 +817,39 @@ class VidCal(tk.Tk):
                                "vidcal_testbild_tmp.png")
         cv2.imwrite(tmp_png, frame)
 
+        # Reinen Gerätenamen extrahieren (ohne [Typ]-Prefix)
+        import re as _re
+        m = _re.match(r'\[.*?\]\s+(.*)', device)
+        device_name = m.group(1).strip() if m else device.strip()
+
+        # Gewählte Auflösung übernehmen
+        res_str = self._tb_res.get()
+        res_map = {
+            "1920×1080":      "1920x1080",
+            "1280×720":       "1280x720",
+            "720×576 (PAL)":  "720x576",
+            "720×480 (NTSC)": "720x480",
+        }
+        res = res_map.get(res_str, "1920x1080")
+
         # FFmpeg-Befehl: Bild als Endlosschleife an DirectShow-Gerät
         ffmpeg = find_ffmpeg()
         cmd = (
             f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-            f'-f dshow -video_size 1920x1080 '
+            f'-f dshow -video_size {res} '
             f'-vcodec rawvideo -pix_fmt yuyv422 '
-            f'-y "video={device}"'
+            f'-y "video={device_name}"'
         )
 
         info = (
-            f"Gerät: {device}\n\n"
-            f"FFmpeg-Befehl (wird in separatem Fenster ausgeführt):\n"
-            f"{cmd}\n\n"
-            "Hinweis: Das Bild wird als Endlosschleife ausgegeben.\n"
+            f"Gerät: {device_name}\n"
+            f"Auflösung: {res}\n\n"
+            f"FFmpeg-Befehl:\n{cmd}\n\n"
+            "Das Bild wird als Endlosschleife ausgegeben.\n"
             "Fenster schließen zum Stoppen.\n\n"
-            "⚠️  Für Ausgabe an physische Capture-Karten (Blackmagic, IEEE 1394)\n"
-            "wird ein VirtualCam- oder Loopback-Treiber benötigt\n"
-            "(z.B. OBS Virtual Camera, VirtualCam, DirectShow Filter)."
+            "⚠️  Hinweis: Blackmagic/IEEE 1394 Karten können\n"
+            "nur als Eingang, nicht als Ausgang über DirectShow\n"
+            "angesteuert werden. Für Ausgabe → Blackmagic Media Express nutzen."
         )
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
             threading.Thread(
@@ -844,7 +859,7 @@ class VidCal(tk.Tk):
                 ),
                 daemon=True
             ).start()
-            self._tb_output_status.config(text=f"▶ Ausgabe läuft → {device}")
+            self._tb_output_status.config(text=f"▶ Ausgabe läuft → {device_name} ({res})")
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
