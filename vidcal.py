@@ -979,18 +979,18 @@ class VidCal(tk.Tk):
                 self.after(0, lambda n=name: self._tb_output_status.config(
                     text=f"▶ Ausgabe: {n} ({duration}s) → {device_name}"))
                 frame = gen_fn()
-                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                cv2.imwrite(tmp.name, frame)
-                tmp.close()
-                cmd, _ = self._build_ffmpeg_output_cmd(tmp.name, device_name, device_type, res, fps)
-                # Begrenzter Loop: duration Sekunden
+                # Temporäre Datei immer in %TEMP%
+                tmp_path = os.path.join(tempfile.gettempdir(), f"vidcal_seq_{name.replace(' ','_')}.png")
+                cv2.imwrite(tmp_path, frame)
+                self.after(0, lambda p=tmp_path, n=name: self._log(f"Sequenz-Frame gespeichert: {p} ({n})", "INFO"))
+                cmd, _ = self._build_ffmpeg_output_cmd(tmp_path, device_name, device_type, res, fps)
                 timed_cmd = cmd.replace("-loop 1", f"-t {duration} -loop 1")
                 proc = self._run_ffmpeg_logged(timed_cmd, f"Sequenz: {name}")
                 self._output_proc = proc
                 if proc:
                     proc.wait()
                 try:
-                    os.unlink(tmp.name)
+                    os.unlink(tmp_path)
                 except:
                     pass
             self._output_proc = None
@@ -1145,11 +1145,14 @@ class VidCal(tk.Tk):
                 "Klicke 🔄 um Geräte neu zu suchen.")
             return
 
-        # Testbild als temporäre PNG speichern
-        tmp_png = os.path.join(os.path.dirname(sys.executable)
-                               if getattr(sys, 'frozen', False) else os.getcwd(),
-                               "vidcal_testbild_tmp.png")
-        cv2.imwrite(tmp_png, frame)
+        # Testbild als temporäre PNG speichern — immer in %TEMP%, nie in Program Files
+        import tempfile as _tmp
+        tmp_png = os.path.join(_tmp.gettempdir(), "vidcal_testbild_tmp.png")
+        ok = cv2.imwrite(tmp_png, frame)
+        self._log(f"Testbild gespeichert: {tmp_png} (ok={ok})", "INFO")
+        if not ok:
+            messagebox.showerror("Fehler", f"Konnte Testbild nicht speichern:\n{tmp_png}")
+            return
 
         # Reinen Gerätenamen extrahieren (ohne [Typ]-Prefix)
         import re as _re
