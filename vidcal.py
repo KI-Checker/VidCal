@@ -928,10 +928,13 @@ class VidCal(tk.Tk):
                 # Lösung: Testbild als DV-AVI auf Desktop exportieren →
                 # in Blackmagic Media Express öffnen → Loop-Playback → auf Band aufnehmen
                 out_avi = os.path.join(os.path.expanduser("~"), "Desktop", "VidCal_Testbild.avi")
+                # DV PAL: yuv420p (720x576@25fps)
+                # DV NTSC: yuv411p (720x480@29.97fps)
+                dv_pix = "yuv411p" if fps == "29.97" else "yuv420p"
                 return (
                     f'"{ffmpeg}" -y -loop 1 -t 30 -re -i "{tmp_png}" '
-                    f'-vf "scale={res},fps={fps}" '
-                    f'-c:v dvvideo -pix_fmt dv '
+                    f'-vf "scale={res},fps={fps},format={dv_pix}" '
+                    f'-c:v dvvideo -pix_fmt {dv_pix} '
                     f'"{out_avi}"'
                 ), f"DV-AVI Export → Desktop\\VidCal_Testbild.avi"
 
@@ -941,12 +944,14 @@ class VidCal(tk.Tk):
             # Lösung: Testbild als DV-AVI speichern → mit Windows Movie Maker
             # oder MediaExpress auf Band ausgeben.
             # Alternativ: ffmpeg → pipe → WinDV (falls installiert)
+            out_avi = os.path.join(os.path.expanduser("~"), "Desktop", "VidCal_Testbild.avi")
+            dv_pix = "yuv411p" if fps == "29.97" else "yuv420p"
             return (
-                f'"{ffmpeg}" -loop 1 -t {fps} -re -i "{tmp_png}" '
-                f'-vf "scale={res},fps={fps}" '
-                f'-c:v dvvideo -pix_fmt dv '
-                f'-f avi "testbild_dv_output.avi"'
-            ), "IEEE 1394 — DV-AVI Export (manuell auf Band überspielen)"
+                f'"{ffmpeg}" -y -loop 1 -t 30 -re -i "{tmp_png}" '
+                f'-vf "scale={res},fps={fps},format={dv_pix}" '
+                f'-c:v dvvideo -pix_fmt {dv_pix} '
+                f'"{out_avi}"'
+            ), "IEEE 1394 — DV-AVI Export → Desktop\\VidCal_Testbild.avi"
 
         elif "Virtual" in device_type or "NDI" in device_type:
             return (
