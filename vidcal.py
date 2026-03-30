@@ -448,40 +448,42 @@ def enumerate_video_devices():
             # "Alternative name" immer überspringen
             if "Alternative name" in line:
                 continue
+            # Nur Video-Geräte — Audio-only überspringen
+            # Zeile muss "(video)" oder "(audio, video)" enthalten
+            # aber NICHT "(audio)" allein
+            has_video = ("(video)" in line or "(audio, video)" in line)
+            has_audio_only = ("(audio)" in line and "(video)" not in line)
+            if not has_video or has_audio_only:
+                continue
+            if "@device" in line:
+                continue
 
-            # FFmpeg <6: "[dshow @ ...]" mit Sektionsüberschriften
-            # FFmpeg 8+:  "[in#0 @ ...]  "Gerätename" (video)" oder "(audio, video)"
-            # Wir erkennen Video-Geräte an: Zeile enthält "(video)" — egal welches Format
-            is_video_line = (
-                ("(video)" in line or "(audio, video)" in line)
-                and ("@device" not in line)
-            )
-            # Älteres Format: in Sektion "DirectShow video devices", kein (video)-Tag
-            if "DirectShow video devices" in line:
-                continue  # Überschrift selbst überspringen
+            # Gerätenamen aus Anführungszeichen extrahieren
+            # Robust: auch bei abgeschnittenen Zeilen (fehlendes [in#0 Prefix)
+            m = re.search(r'"([^"]{2,})"', line)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            if not name or name.startswith("@"):
+                continue
 
-            m = re.search(r'"([^"@][^"]*)"', line)
-            if m and is_video_line:
-                name = m.group(1).strip()
-                if not name:
-                    continue
-                lower = name.lower()
-                if any(k in lower for k in ["1394", "firewire", "dv camera", "dv vcr", "ohci", "msdv", "microsoft dv"]):
-                    label = f"[IEEE 1394]  {name}"
-                elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink"]):
-                    label = f"[Blackmagic]  {name}"
-                elif any(k in lower for k in ["gv-usb", "gvusb"]):
-                    label = f"[I/O Data]  {name}"
-                elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
-                    label = f"[Elgato]  {name}"
-                elif any(k in lower for k in ["vmix", "ndi", "virtual", "obs", "vcam", "loopback"]):
-                    label = f"[Virtual/NDI]  {name}"
-                elif any(k in lower for k in ["magewell", "aja", "matrox"]):
-                    label = f"[Pro Capture]  {name}"
-                else:
-                    label = f"[DirectShow]  {name}"
-                if label not in devices:
-                    devices.append(label)
+            lower = name.lower()
+            if any(k in lower for k in ["1394", "firewire", "dv camera", "dv vcr", "ohci", "msdv", "microsoft dv"]):
+                label = f"[IEEE 1394]  {name}"
+            elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink", "intensity pro"]):
+                label = f"[Blackmagic]  {name}"
+            elif any(k in lower for k in ["gv-usb", "gvusb"]):
+                label = f"[I/O Data]  {name}"
+            elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
+                label = f"[Elgato]  {name}"
+            elif any(k in lower for k in ["vmix", "ndi", "virtual", "obs", "vcam", "loopback"]):
+                label = f"[Virtual/NDI]  {name}"
+            elif any(k in lower for k in ["magewell", "aja", "matrox"]):
+                label = f"[Pro Capture]  {name}"
+            else:
+                label = f"[DirectShow]  {name}"
+            if label not in devices:
+                devices.append(label)
 
     except FileNotFoundError:
         raw = f"FEHLER: FFmpeg nicht gefunden unter: {ffmpeg}"
@@ -731,15 +733,17 @@ class VidCal(tk.Tk):
             ), "Blackmagic DeckLink Output"
 
         elif "IEEE 1394" in device_type:
-            # IEEE 1394 / FireWire: Video als Rohvideo, Ausgabe via dshow
-            # dv1394 funktioniert nur auf Linux — auf Windows: rawvideo über dshow
+            # IEEE 1394 / FireWire auf Windows:
+            # DirectShow hat keinen nativen DV-Ausgabe-Treiber.
+            # Lösung: Testbild als DV-AVI speichern → mit Windows Movie Maker
+            # oder MediaExpress auf Band ausgeben.
+            # Alternativ: ffmpeg → pipe → WinDV (falls installiert)
             return (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-vf "scale={res},fps={fps},format=yuv420p" '
-                f'-f rawvideo -pix_fmt yuv420p pipe:1 | '
-                f'"{ffmpeg}" -f rawvideo -pix_fmt yuv420p -s {res} -r {fps} -i pipe:0 '
-                f'-c:v dvvideo -pix_fmt dv -f dshow -y "video={device_name}"'
-            ), "IEEE 1394 DV Output (via DirectShow)"
+                f'"{ffmpeg}" -loop 1 -t {fps} -re -i "{tmp_png}" '
+                f'-vf "scale={res},fps={fps}" '
+                f'-c:v dvvideo -pix_fmt dv '
+                f'-f avi "testbild_dv_output.avi"'
+            ), "IEEE 1394 — DV-AVI Export (manuell auf Band überspielen)"
 
         elif "Virtual" in device_type or "NDI" in device_type:
             return (
@@ -991,10 +995,20 @@ class VidCal(tk.Tk):
         # Ausgabe-Methode je nach Gerätetyp
         cmd, method = self._build_ffmpeg_output_cmd(tmp_png, device_name, device_type, res, fps)
 
+        ieee_hinweis = ""
+        if "IEEE 1394" in device_type:
+            ieee_hinweis = (
+                "\n⚠️  IEEE 1394 Hinweis:\n"
+                "Windows hat keinen nativen FireWire-Ausgabe-Treiber.\n"
+                "Das Testbild wird als DV-AVI gespeichert.\n"
+                "→ Mit Windows Movie Maker / MediaExpress auf Band ausgeben.\n"
+            )
+
         info = (
             f"Gerät:     {device_name}\n"
             f"Methode:   {method}\n"
-            f"Auflösung: {res} @ {fps} fps\n\n"
+            f"Auflösung: {res} @ {fps} fps\n"
+            f"{ieee_hinweis}\n"
             f"FFmpeg-Befehl:\n{cmd}\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Workflow Kalibrierung:\n"
