@@ -819,47 +819,85 @@ class VidCal(tk.Tk):
 
         # Reinen Gerätenamen extrahieren (ohne [Typ]-Prefix)
         import re as _re
-        m = _re.match(r'\[.*?\]\s+(.*)', device)
-        device_name = m.group(1).strip() if m else device.strip()
+        m_dev = _re.match(r'\[.*?\]\s+(.*)', device)
+        device_name = m_dev.group(1).strip() if m_dev else device.strip()
+        device_type = _re.match(r'\[(.*?)\]', device)
+        device_type = device_type.group(1) if device_type else ""
 
-        # Gewählte Auflösung übernehmen
+        # Gewählte Auflösung + Framerate
         res_str = self._tb_res.get()
         res_map = {
-            "1920×1080":      "1920x1080",
-            "1280×720":       "1280x720",
-            "720×576 (PAL)":  "720x576",
-            "720×480 (NTSC)": "720x480",
+            "1920×1080":      ("1920x1080", "25"),
+            "1280×720":       ("1280x720",  "25"),
+            "720×576 (PAL)":  ("720x576",   "25"),
+            "720×480 (NTSC)": ("720x480",   "29.97"),
         }
-        res = res_map.get(res_str, "1920x1080")
+        res, fps = res_map.get(res_str, ("1920x1080", "25"))
 
-        # FFmpeg-Befehl: Bild als Endlosschleife an DirectShow-Gerät
         ffmpeg = find_ffmpeg()
-        cmd = (
-            f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-            f'-f dshow -video_size {res} '
-            f'-vcodec rawvideo -pix_fmt yuyv422 '
-            f'-y "video={device_name}"'
-        )
+
+        # Ausgabe-Methode je nach Gerätetyp
+        if "Blackmagic" in device_type or "decklink" in device_name.lower():
+            # Blackmagic: FFmpeg decklink Output-Treiber
+            cmd = (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f decklink '
+                f'-s {res} -r {fps} '
+                f'-pix_fmt uyvy422 '
+                f'"{device_name}"'
+            )
+            method = "Blackmagic DeckLink Output"
+        elif "IEEE 1394" in device_type:
+            # IEEE 1394 DV: Ausgabe als DV-Stream via FireWire
+            cmd = (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f dv1394 '
+                f'-s {res} -r {fps} '
+                f'-pix_fmt yuv420p '
+                f'"{device_name}"'
+            )
+            method = "IEEE 1394 / FireWire DV Output"
+        elif "Virtual" in device_type or "NDI" in device_type:
+            # VirtualCam / NDI: DirectShow Output
+            cmd = (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f dshow '
+                f'-video_size {res} -r {fps} '
+                f'-vcodec rawvideo -pix_fmt yuyv422 '
+                f'-y "video={device_name}"'
+            )
+            method = "DirectShow Virtual Output"
+        else:
+            # Generisch: DirectShow
+            cmd = (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f dshow '
+                f'-video_size {res} -r {fps} '
+                f'-vcodec rawvideo -pix_fmt yuyv422 '
+                f'-y "video={device_name}"'
+            )
+            method = "DirectShow Output"
 
         info = (
-            f"Gerät: {device_name}\n"
-            f"Auflösung: {res}\n\n"
+            f"Gerät:    {device_name}\n"
+            f"Methode:  {method}\n"
+            f"Auflösung: {res} @ {fps} fps\n\n"
             f"FFmpeg-Befehl:\n{cmd}\n\n"
-            "Das Bild wird als Endlosschleife ausgegeben.\n"
-            "Fenster schließen zum Stoppen.\n\n"
-            "⚠️  Hinweis: Blackmagic/IEEE 1394 Karten können\n"
-            "nur als Eingang, nicht als Ausgang über DirectShow\n"
-            "angesteuert werden. Für Ausgabe → Blackmagic Media Express nutzen."
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Workflow für Kalibrierung:\n"
+            "1. Testbild über Karte ausgeben\n"
+            "2. Am analogen Gerät aufnehmen (z.B. VHS, BetaSP)\n"
+            "3. Band abspielen → Karte als Eingang\n"
+            "4. Frame in VidCal laden → Analyse\n"
+            "5. LUT generieren → Farbkorrektur fertig"
         )
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
-            threading.Thread(
-                target=lambda: subprocess.Popen(
-                    cmd, shell=True,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform=="win32" else 0
-                ),
-                daemon=True
-            ).start()
-            self._tb_output_status.config(text=f"▶ Ausgabe läuft → {device_name} ({res})")
+            self._output_proc = subprocess.Popen(
+                cmd, shell=True,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform=="win32" else 0
+            )
+            self._tb_output_status.config(
+                text=f"▶ Ausgabe läuft → {device_name} ({res})   [Fenster schließen = Stop]")
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
