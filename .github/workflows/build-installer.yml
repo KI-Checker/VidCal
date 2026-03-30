@@ -30,6 +30,16 @@ jobs:
             --name vidcal `
             vidcal.py
 
+      - name: FFmpeg herunterladen & in dist bündeln
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
+          $ffmpegDir = Get-ChildItem ffmpeg_tmp | Select-Object -First 1
+          New-Item -ItemType Directory -Path "dist\vidcal\ffmpeg" -Force
+          Copy-Item "$($ffmpegDir.FullName)\bin\ffmpeg.exe" "dist\vidcal\ffmpeg\ffmpeg.exe"
+          Write-Host "FFmpeg gebündelt: $(Get-Item dist\vidcal\ffmpeg\ffmpeg.exe | Select-Object -ExpandProperty Length) Bytes"
+
       - name: Inno Setup — Installer bauen
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
         with:

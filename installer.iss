@@ -16,6 +16,7 @@ MinVersion=10.0
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Files]
+; Hauptprogramm inkl. gebündeltem FFmpeg (in dist\vidcal\ffmpeg\)
 Source: "dist\vidcal\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

@@ -403,6 +403,14 @@ def generate_avisynth_script(device_name, lut_path, output_avi, gamma,
 # Testbild-Vorschau & Analyse
 # ─────────────────────────────────────────────────────────────────────────────
 
+def find_ffmpeg():
+    """Findet FFmpeg — zuerst gebündelt neben der EXE, dann im System-PATH."""
+    base = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+    bundled = base / "ffmpeg" / "ffmpeg.exe"
+    if bundled.exists():
+        return str(bundled)
+    return "ffmpeg"  # Fallback: System-PATH
+
 def enumerate_video_devices():
     """
     Listet alle DirectShow Video-Geräte via FFmpeg auf.
@@ -413,7 +421,7 @@ def enumerate_video_devices():
     devices = []
     try:
         result = subprocess.run(
-            ["ffmpeg", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            [find_ffmpeg(), "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
             capture_output=True, text=True, timeout=8
         )
         # FFmpeg schreibt Geräteliste nach stderr
@@ -642,9 +650,9 @@ class VidCal(tk.Tk):
         cv2.imwrite(tmp_png, frame)
 
         # FFmpeg-Befehl: Bild als Endlosschleife an DirectShow-Gerät
-        # (benötigt FFmpeg + z.B. OBS Virtual Camera oder einen VirtualCam-Treiber als Ausgabe)
+        ffmpeg = find_ffmpeg()
         cmd = (
-            f'ffmpeg -loop 1 -re -i "{tmp_png}" '
+            f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
             f'-f dshow -video_size 1920x1080 '
             f'-vcodec rawvideo -pix_fmt yuyv422 '
             f'-y "video={device}"'
