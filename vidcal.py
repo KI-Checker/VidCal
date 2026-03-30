@@ -924,13 +924,16 @@ class VidCal(tk.Tk):
                     f'"{device_name}"'
                 ), "Blackmagic DeckLink Output"
             else:
-                # Fallback: DirectShow über Blackmagic WDM-Treiber
+                # Kein DeckLink SDK in FFmpeg (Blackmagic sperrt das aus Lizenzgründen).
+                # Lösung: Testbild als DV-AVI auf Desktop exportieren →
+                # in Blackmagic Media Express öffnen → Loop-Playback → auf Band aufnehmen
+                out_avi = os.path.join(os.path.expanduser("~"), "Desktop", "VidCal_Testbild.avi")
                 return (
-                    f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                    f'-vf "scale={res},fps={fps},format=uyvy422" '
-                    f'-f dshow -vcodec rawvideo -pix_fmt uyvy422 '
-                    f'-y "video={device_name}"'
-                ), "Blackmagic WDM (DirectShow Fallback — kein DeckLink SDK)"
+                    f'"{ffmpeg}" -y -loop 1 -t 30 -re -i "{tmp_png}" '
+                    f'-vf "scale={res},fps={fps}" '
+                    f'-c:v dvvideo -pix_fmt dv '
+                    f'"{out_avi}"'
+                ), f"DV-AVI Export → Desktop\\VidCal_Testbild.avi"
 
         elif "IEEE 1394" in device_type:
             # IEEE 1394 / FireWire auf Windows:
@@ -1233,11 +1236,14 @@ class VidCal(tk.Tk):
         # Warnung wenn DeckLink-SDK fehlt
         if "Blackmagic" in device_type and not ffmpeg_has_format("decklink"):
             info += (
-                "\n\n⚠️  DeckLink-SDK nicht im gebündelten FFmpeg!\n"
-                "Fallback: DirectShow (WDM-Treiber).\n"
-                "Für nativen DeckLink-Output: FFmpeg mit --enable-decklink\n"
-                "von https://www.gyan.dev/ffmpeg/builds/ (full_build) installieren\n"
-                "und in C:\\Program Files (x86)\\VidCal\\ffmpeg\\ ersetzen."
+                "\n\n⚠️  Blackmagic DeckLink Output:\n"
+                "FFmpeg kann Blackmagic-Karten aus Lizenzgründen nicht direkt\n"
+                "bespielen (kein öffentliches DeckLink SDK).\n\n"
+                "Workflow:\n"
+                "1. VidCal exportiert das Testbild als 'VidCal_Testbild.avi' auf den Desktop\n"
+                "2. Blackmagic Media Express öffnen\n"
+                "3. AVI laden → Loop-Playback starten\n"
+                "4. Am angeschlossenen Gerät aufnehmen"
             )
 
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
