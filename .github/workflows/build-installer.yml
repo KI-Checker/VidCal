@@ -1,0 +1,51 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: PyInstaller — vidcal.exe bauen
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name vidcal `
+            vidcal.py
+
+      - name: Inno Setup — Installer bauen
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: installer.iss
+          options: /O"Output"
+
+      - name: Installer als Artifact speichern
+        uses: actions/upload-artifact@v4
+        with:
+          name: VidCal-Setup
+          path: Output/VidCal-Setup.exe
+
+      - name: Release erstellen & Installer hochladen
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Output/VidCal-Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
