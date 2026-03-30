@@ -576,6 +576,8 @@ class VidCal(tk.Tk):
         btn_dev_frame.grid(row=row, column=2, padx=4, sticky="w")
         tk.Button(btn_dev_frame, text="🔄", command=self._refresh_devices,
                   bg="#3c3c3c", fg="white", relief="flat", width=3).pack(side="left", padx=2)
+        tk.Button(btn_dev_frame, text="⚙️ Parameter", command=self._show_device_params,
+                  bg="#007acc", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         tk.Button(btn_dev_frame, text="🔍 Diagnose", command=self._show_device_diagnostics,
                   bg="#3c3c3c", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         row += 1
@@ -676,6 +678,129 @@ class VidCal(tk.Tk):
         txt.config(state="disabled")
         sb = ttk.Scrollbar(win, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)
+
+    def _show_device_params(self):
+        """Zeigt und bearbeitet die DirectShow-Parameter des gewählten Geräts."""
+        device_label = self._tb_device_var.get()
+        if not device_label or "kein Gerät" in device_label or "geladen" in device_label:
+            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein Gerät auswählen.")
+            return
+
+        # Reinen Gerätenamen extrahieren (ohne [Typ]-Prefix)
+        import re
+        m = re.match(r'\[.*?\]\s+(.*)', device_label)
+        device_name = m.group(1) if m else device_label
+
+        win = tk.Toplevel(self)
+        win.title(f"⚙️ Geräteparameter — {device_name}")
+        win.configure(bg="#1e1e1e")
+        win.geometry("680x520")
+        win.resizable(True, True)
+
+        tk.Label(win, text=f"Gerät: {device_name}",
+                 bg="#1e1e1e", fg="#4ec9b0", font=("Segoe UI", 11, "bold")).pack(
+                 anchor="w", padx=12, pady=(10,2))
+
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill="both", expand=True, padx=8, pady=8)
+
+        # ── Tab: Videoformat ──
+        tab_video = ttk.Frame(notebook)
+        notebook.add(tab_video, text="📹 Videoformat")
+
+        params = [
+            ("Auflösung",        "resolution",   ["1920x1080", "1280x720", "720x576", "720x480", "1024x576", "768x576"]),
+            ("Framerate",        "framerate",     ["25", "29.97", "30", "50", "59.94", "60", "23.976", "24"]),
+            ("Pixelformat",      "pixel_format",  ["yuyv422", "uyvy422", "nv12", "yuv420p", "rgb24", "bgr24"]),
+            ("Scan-Typ",         "scan_type",     ["Interlaced TFF", "Interlaced BFF", "Progressiv"]),
+            ("Farbbereich",      "color_range",   ["TV (16-235)", "PC / Full Range (0-255)"]),
+            ("Farbraum",         "colorspace",    ["BT.601 (SD)", "BT.709 (HD)", "BT.2020 (UHD)"]),
+        ]
+
+        self._dev_params = {}
+        for i, (label, key, values) in enumerate(params):
+            tk.Label(tab_video, text=label + ":", bg="#1e1e1e", fg="#d4d4d4",
+                     width=16, anchor="w").grid(row=i, column=0, padx=12, pady=5, sticky="w")
+            var = tk.StringVar(value=values[0])
+            cb = ttk.Combobox(tab_video, textvariable=var, values=values,
+                              state="normal", width=28)
+            cb.grid(row=i, column=1, padx=8, pady=5, sticky="w")
+            self._dev_params[key] = var
+
+        # ── Tab: Bildqualität ──
+        tab_quality = ttk.Frame(notebook)
+        notebook.add(tab_quality, text="🎛 Bildqualität")
+
+        sliders = [
+            ("Helligkeit",   "brightness",  -100, 100,  0),
+            ("Kontrast",     "contrast",    -100, 100,  0),
+            ("Sättigung",    "saturation",  -100, 100,  0),
+            ("Schärfe",      "sharpness",      0, 100,  50),
+            ("Gamma",        "gamma_dev",    50,  200, 100),
+        ]
+        self._dev_sliders = {}
+        for i, (label, key, mn, mx, default) in enumerate(sliders):
+            tk.Label(tab_quality, text=label + ":", bg="#1e1e1e", fg="#d4d4d4",
+                     width=14, anchor="w").grid(row=i, column=0, padx=12, pady=6, sticky="w")
+            var = tk.IntVar(value=default)
+            scale = tk.Scale(tab_quality, from_=mn, to=mx, orient="horizontal",
+                             variable=var, length=280, bg="#2d2d2d", fg="white",
+                             troughcolor="#3c3c3c", highlightthickness=0,
+                             activebackground="#007acc")
+            scale.grid(row=i, column=1, padx=8, pady=4, sticky="w")
+            val_label = tk.Label(tab_quality, textvariable=var, bg="#1e1e1e",
+                                 fg="#4ec9b0", width=5)
+            val_label.grid(row=i, column=2, padx=4)
+            self._dev_sliders[key] = var
+
+        # ── Tab: FFmpeg-Befehl Vorschau ──
+        tab_cmd = ttk.Frame(notebook)
+        notebook.add(tab_cmd, text="📋 FFmpeg-Befehl")
+
+        self._dev_cmd_text = tk.Text(tab_cmd, bg="#111", fg="#9cdcfe",
+                                      font=("Consolas", 9), height=12, wrap="none")
+        self._dev_cmd_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        def update_cmd(*_):
+            res   = self._dev_params["resolution"].get()
+            fps   = self._dev_params["framerate"].get()
+            pxfmt = self._dev_params["pixel_format"].get()
+            ffmpeg = find_ffmpeg()
+            cmd = (
+                f'"{ffmpeg}" -f dshow \\\n'
+                f'  -video_size {res} \\\n'
+                f'  -framerate {fps} \\\n'
+                f'  -pixel_format {pxfmt} \\\n'
+                f'  -i "video={device_name}" \\\n'
+                f'  -vf "eq=brightness={self._dev_sliders["brightness"].get()/100:.2f}'
+                f':contrast={1 + self._dev_sliders["contrast"].get()/100:.2f}'
+                f':saturation={1 + self._dev_sliders["saturation"].get()/100:.2f}'
+                f':gamma={self._dev_sliders["gamma_dev"].get()/100:.2f}" \\\n'
+                f'  output_calibrated.avi'
+            )
+            self._dev_cmd_text.config(state="normal")
+            self._dev_cmd_text.delete("1.0", "end")
+            self._dev_cmd_text.insert("end", cmd)
+            self._dev_cmd_text.config(state="disabled")
+
+        # Alle Änderungen live updaten
+        for v in list(self._dev_params.values()) + list(self._dev_sliders.values()):
+            v.trace_add("write", update_cmd)
+        update_cmd()
+
+        # Buttons
+        btn_frame = tk.Frame(win, bg="#1e1e1e")
+        btn_frame.pack(fill="x", padx=10, pady=(0,10))
+        tk.Button(btn_frame, text="✅ Übernehmen & Schließen",
+                  command=win.destroy,
+                  bg="#007acc", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="🔧 Windows Kameraeinstellungen öffnen",
+                  command=lambda: subprocess.Popen(
+                      f'"{find_ffmpeg()}" -f dshow -show_video_device_dialog true -i "video={device_name}"',
+                      shell=True,
+                      creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
+                  ),
+                  bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
 
     def _output_testbild(self):
         """Gibt das aktuelle Testbild als Vollbild-Loop an das gewählte Capture-Gerät aus."""
@@ -985,17 +1110,208 @@ class VidCal(tk.Tk):
             "MOV — DNxHD 185x (1080p25)",
         ], state="readonly", width=46)
         self._avs_encoder.current(0)
-        self._avs_encoder.grid(row=4, column=1, columnspan=2, padx=4, pady=4, sticky="w")
+        self._avs_encoder.grid(row=4, column=1, padx=4, pady=4, sticky="w")
+        self._avs_encoder.bind("<<ComboboxSelected>>", self._update_encoder_params)
+        tk.Button(f, text="⚙️ Parameter", command=self._show_encoder_params,
+                  bg="#007acc", fg="white", relief="flat", padx=8).grid(row=4, column=2, padx=4)
+
+        # Encoder-Parameter Kurzanzeige
+        self._enc_param_label = tk.Label(f, text="", bg="#1e1e1e", fg="#ce9178",
+                                          font=("Consolas", 9))
+        self._enc_param_label.grid(row=5, column=0, columnspan=4, padx=14, pady=0, sticky="w")
 
         tk.Button(f, text="📄 Script generieren & speichern", command=self._generate_avs,
                   bg="#007acc", fg="white", relief="flat", padx=16, pady=6).grid(
-                  row=5, column=0, columnspan=4, padx=12, pady=10, sticky="w")
+                  row=6, column=0, columnspan=4, padx=12, pady=10, sticky="w")
 
         self._avs_text = tk.Text(f, bg="#111", fg="#9cdcfe", height=18,
                                   font=("Consolas", 9))
-        self._avs_text.grid(row=6, column=0, columnspan=4, padx=10, pady=8, sticky="nsew")
-        f.rowconfigure(6, weight=1)
+        self._avs_text.grid(row=7, column=0, columnspan=4, padx=10, pady=8, sticky="nsew")
+        f.rowconfigure(7, weight=1)
         f.columnconfigure(3, weight=1)
+
+        # Encoder-Parameter initialisieren
+        self._enc_params = {}
+        self.after(100, self._update_encoder_params)
+
+    def _update_encoder_params(self, event=None):
+        """Setzt Standardwerte für den gewählten Encoder und aktualisiert Kurzanzeige."""
+        enc = self._avs_encoder.get()
+        # Standardwerte je Codec
+        defaults = {
+            "H.264":     {"crf": "18", "preset": "slow",   "extra": ""},
+            "H.265":     {"crf": "22", "preset": "slow",   "extra": ""},
+            "FFV1":      {"level": "3",  "threads": "8",    "extra": ""},
+            "DVCPro50":  {"pix_fmt": "yuv422p", "extra": ""},
+            "DV25":      {"pix_fmt": "yuv420p", "extra": ""},
+            "XDCAM":     {"bitrate": "50M", "extra": "-dc 10 -intra_vlc 1"},
+            "ProRes 422 HQ": {"profile": "3", "pix_fmt": "yuv422p10le", "extra": ""},
+            "ProRes 422":    {"profile": "2", "pix_fmt": "yuv422p10le", "extra": ""},
+            "ProRes 4444":   {"profile": "4", "pix_fmt": "yuva444p10le","extra": ""},
+            "DNxHD":     {"bitrate": "185M", "pix_fmt": "yuv422p", "extra": ""},
+            "unkomprimiert": {"pix_fmt": "yuyv422", "extra": ""},
+        }
+        matched = {}
+        for key, vals in defaults.items():
+            if key in enc:
+                matched = vals
+                break
+        self._enc_params = dict(matched)
+
+        # Kurzanzeige aufbauen
+        summary = "  ".join(f"{k}={v}" for k, v in matched.items() if v)
+        self._enc_param_label.config(text=f"  {summary}" if summary else "")
+
+    def _show_encoder_params(self):
+        """Öffnet Encoder-Parameter-Dialog für den gewählten Codec."""
+        enc = self._avs_encoder.get()
+
+        win = tk.Toplevel(self)
+        win.title(f"⚙️ Encoder-Parameter — {enc}")
+        win.configure(bg="#1e1e1e")
+        win.geometry("560x480")
+
+        tk.Label(win, text=enc, bg="#1e1e1e", fg="#4ec9b0",
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10,6))
+
+        frame = tk.Frame(win, bg="#1e1e1e")
+        frame.pack(fill="both", expand=True, padx=12, pady=4)
+
+        fields = {}
+
+        def add_row(row, label, key, values=None, default=""):
+            tk.Label(frame, text=label + ":", bg="#1e1e1e", fg="#d4d4d4",
+                     width=20, anchor="w").grid(row=row, column=0, padx=8, pady=5, sticky="w")
+            var = tk.StringVar(value=self._enc_params.get(key, default))
+            if values:
+                w = ttk.Combobox(frame, textvariable=var, values=values, state="normal", width=24)
+            else:
+                w = tk.Entry(frame, textvariable=var, bg="#2d2d2d", fg="white", width=26)
+            w.grid(row=row, column=1, padx=8, pady=5, sticky="w")
+            fields[key] = var
+
+        row = 0
+        if "H.264" in enc:
+            add_row(row, "CRF (0=lossless, 51=schlechteste)", "crf",
+                    [str(i) for i in range(0,52,1)], "18"); row+=1
+            add_row(row, "Preset", "preset",
+                    ["ultrafast","superfast","veryfast","faster","fast",
+                     "medium","slow","slower","veryslow"], "slow"); row+=1
+            add_row(row, "Profil", "profile",
+                    ["baseline","main","high","high10"], "high"); row+=1
+            add_row(row, "Tune", "tune",
+                    ["", "film","animation","grain","stillimage","fastdecode"], "film"); row+=1
+            add_row(row, "Bitrate (leer = CRF)", "bitrate", None, ""); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        elif "H.265" in enc:
+            add_row(row, "CRF (0=lossless, 51=schlechteste)", "crf",
+                    [str(i) for i in range(0,52,1)], "22"); row+=1
+            add_row(row, "Preset", "preset",
+                    ["ultrafast","superfast","veryfast","faster","fast",
+                     "medium","slow","slower","veryslow"], "slow"); row+=1
+            add_row(row, "Tune", "tune",
+                    ["", "grain","fastdecode","zerolatency"], ""); row+=1
+            add_row(row, "Bitrate (leer = CRF)", "bitrate", None, ""); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        elif "FFV1" in enc:
+            add_row(row, "Level", "level", ["1","3"], "3"); row+=1
+            add_row(row, "Threads", "threads",
+                    ["1","2","4","8","16"], "8"); row+=1
+            add_row(row, "Slices", "slices", ["4","6","9","16","24","30"], "16"); row+=1
+            add_row(row, "Coder", "coder", ["0 (Golomb-Rice)", "1 (Range Coder)"], "1"); row+=1
+
+        elif "DVCPro50" in enc or "DV50" in enc or "DV25" in enc:
+            add_row(row, "Pixelformat", "pix_fmt",
+                    ["yuv422p","yuv420p","yuv411p"], "yuv422p"); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        elif "XDCAM" in enc:
+            add_row(row, "Bitrate", "bitrate",
+                    ["25M","35M","50M"], "50M"); row+=1
+            add_row(row, "DC-Präzision", "dc", ["8","9","10"], "10"); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None,
+                    "-intra_vlc 1 -non_linear_quant 1"); row+=1
+
+        elif "ProRes" in enc:
+            profiles = {
+                "ProRes 422 LT": "1", "ProRes 422": "2",
+                "ProRes 422 HQ": "3", "ProRes 4444": "4", "ProRes 4444 XQ": "5"
+            }
+            add_row(row, "Profil", "profile",
+                    [f"{k} ({v})" for k,v in profiles.items()], "3"); row+=1
+            add_row(row, "Pixelformat", "pix_fmt",
+                    ["yuv422p10le","yuva444p10le"], "yuv422p10le"); row+=1
+            add_row(row, "Vendor ID", "vendor", None, "apl0"); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        elif "DNxHD" in enc:
+            add_row(row, "Bitrate", "bitrate",
+                    ["36M","115M","145M","185M","185x","220M","220x"], "185M"); row+=1
+            add_row(row, "Pixelformat", "pix_fmt",
+                    ["yuv422p","yuv422p10le"], "yuv422p"); row+=1
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        elif "unkomprimiert" in enc:
+            add_row(row, "Pixelformat", "pix_fmt",
+                    ["yuyv422","uyvy422","rgb24","bgr24","yuv420p"], "yuyv422"); row+=1
+
+        else:
+            add_row(row, "Zusätzliche Flags", "extra", None, ""); row+=1
+
+        # Vorschau-Textfeld
+        tk.Label(win, text="FFmpeg-Parameter Vorschau:", bg="#1e1e1e",
+                 fg="#d4d4d4", font=("Segoe UI", 9)).pack(anchor="w", padx=12, pady=(8,2))
+        preview = tk.Text(win, bg="#111", fg="#ce9178", font=("Consolas", 9),
+                          height=4, wrap="none")
+        preview.pack(fill="x", padx=12, pady=(0,4))
+
+        def update_preview(*_):
+            parts = []
+            for k, v in fields.items():
+                val = v.get().strip()
+                if not val: continue
+                if k == "crf":     parts.append(f"-crf {val}")
+                elif k == "preset":parts.append(f"-preset {val}")
+                elif k == "profile":
+                    # Nur Zahl extrahieren falls "Name (N)" Format
+                    import re as _re
+                    nm = _re.search(r'\((\d)\)', val)
+                    parts.append(f"-profile:v {nm.group(1) if nm else val}")
+                elif k == "pix_fmt": parts.append(f"-pix_fmt {val}")
+                elif k == "bitrate": parts.append(f"-b:v {val}")
+                elif k == "level":   parts.append(f"-level {val}")
+                elif k == "threads": parts.append(f"-threads {val}")
+                elif k == "tune":    parts.append(f"-tune {val}")
+                elif k == "vendor":  parts.append(f"-vendor {val}")
+                elif k == "dc":      parts.append(f"-dc {val}")
+                elif k == "slices":  parts.append(f"-slices {val}")
+                elif k == "coder":   parts.append(f"-coder {val.split()[0]}")
+                elif k == "extra":   parts.append(val)
+            preview.config(state="normal")
+            preview.delete("1.0","end")
+            preview.insert("end", " ".join(parts))
+            preview.config(state="disabled")
+
+        for v in fields.values():
+            v.trace_add("write", update_preview)
+        update_preview()
+
+        def apply_and_close():
+            for k, v in fields.items():
+                self._enc_params[k] = v.get()
+            # Kurzanzeige updaten
+            summary = "  ".join(f"{k}={v.get()}" for k,v in fields.items() if v.get())
+            self._enc_param_label.config(text=f"  {summary}")
+            win.destroy()
+
+        btn_f = tk.Frame(win, bg="#1e1e1e")
+        btn_f.pack(fill="x", padx=10, pady=(0,10))
+        tk.Button(btn_f, text="✅ Übernehmen", command=apply_and_close,
+                  bg="#007acc", fg="white", relief="flat", padx=14, pady=4).pack(side="left", padx=4)
+        tk.Button(btn_f, text="✖ Abbrechen", command=win.destroy,
+                  bg="#3c3c3c", fg="white", relief="flat", padx=14, pady=4).pack(side="left", padx=4)
 
     def _browse_avs_out(self):
         p = filedialog.asksaveasfilename(defaultextension=".avi",
