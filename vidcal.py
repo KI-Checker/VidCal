@@ -120,6 +120,108 @@ def generate_grey_ramp(width=1920, height=1080, steps=16):
         img[:, x0:x1] = (val, val, val)
     return img
 
+# Macbeth ColorChecker — 24 Patches, D50-Referenzwerte (sRGB 8-bit)
+MACBETH_PATCHES = [
+    # Reihe 1
+    ("Dark Skin",        ( 115,  82,  68)),
+    ("Light Skin",       (194, 150, 130)),
+    ("Blue Sky",         ( 98, 122, 157)),
+    ("Foliage",          ( 87, 108,  67)),
+    ("Blue Flower",      (133, 128, 177)),
+    ("Bluish Green",     (103, 189, 170)),
+    # Reihe 2
+    ("Orange",           (214, 126,  44)),
+    ("Purplish Blue",    ( 80,  91, 166)),
+    ("Moderate Red",     (193,  90,  99)),
+    ("Purple",           ( 94,  60, 108)),
+    ("Yellow Green",     (157, 188,  64)),
+    ("Orange Yellow",    (224, 163,  46)),
+    # Reihe 3
+    ("Blue",             ( 56,  61, 150)),
+    ("Green",            ( 70, 148,  73)),
+    ("Red",              (175,  54,  60)),
+    ("Yellow",           (231, 199,  31)),
+    ("Magenta",          (187,  86, 149)),
+    ("Cyan",             (  8, 133, 161)),
+    # Reihe 4 — Graustufen
+    ("White",            (243, 243, 242)),
+    ("Neutral 8",        (200, 200, 200)),
+    ("Neutral 6.5",      (160, 160, 160)),
+    ("Neutral 5",        (122, 122, 121)),
+    ("Neutral 3.5",      ( 85,  85,  85)),
+    ("Black",            ( 52,  52,  52)),
+]
+
+def generate_macbeth_chart(width=1920, height=1080):
+    """
+    Generiert einen Macbeth ColorChecker (4×6 Patches) als numpy-Array (BGR).
+    Mit Patch-Beschriftung und weißem Rand.
+    """
+    img = np.full((height, width, 3), 30, dtype=np.uint8)  # dunkelgrauer Hintergrund
+
+    cols, rows = 6, 4
+    margin_x = int(width  * 0.04)
+    margin_y = int(height * 0.06)
+    gap      = int(width  * 0.012)
+
+    patch_w = (width  - 2 * margin_x - (cols - 1) * gap) // cols
+    patch_h = (height - 2 * margin_y - (rows - 1) * gap) // rows
+
+    for idx, (name, (r, g, b)) in enumerate(MACBETH_PATCHES):
+        row = idx // cols
+        col = idx  % cols
+        x0  = margin_x + col * (patch_w + gap)
+        y0  = margin_y + row * (patch_h + gap)
+        x1, y1 = x0 + patch_w, y0 + patch_h
+
+        # Patch füllen
+        img[y0:y1, x0:x1] = (b, g, r)
+
+        # Rahmen
+        cv2.rectangle(img, (x0, y0), (x1, y1), (200, 200, 200), 1)
+
+        # Patch-Name (klein, unten im Patch)
+        font_scale = max(0.28, patch_w / 480)
+        text_y = y1 - 6
+        cv2.putText(img, name, (x0 + 4, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2)
+        cv2.putText(img, name, (x0 + 4, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (240, 240, 240), 1)
+
+    # Titel
+    cv2.putText(img, "Macbeth ColorChecker — D50 Reference (sRGB)",
+                (margin_x, margin_y - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (180, 180, 180), 1)
+    return img
+
+def analyze_macbeth_from_frame(frame_bgr, cols=6, rows=4):
+    """
+    Misst die 24 Macbeth-Patches aus einem Frame.
+    Erwartet, dass der Chart das gesamte Bild ausfüllt (wie von generate_macbeth_chart).
+    Gibt Liste von (name, ref_rgb, measured_rgb, delta_rgb) zurück.
+    """
+    h, w = frame_bgr.shape[:2]
+    margin_x = int(w  * 0.04)
+    margin_y = int(h  * 0.06)
+    gap      = int(w  * 0.012)
+    patch_w  = (w - 2 * margin_x - (cols - 1) * gap) // cols
+    patch_h  = (h - 2 * margin_y - (rows - 1) * gap) // rows
+
+    results = []
+    for idx, (name, ref_rgb) in enumerate(MACBETH_PATCHES):
+        row = idx // cols
+        col = idx  % cols
+        x0  = margin_x + col * (patch_w + gap) + patch_w // 5
+        y0  = margin_y + row * (patch_h + gap) + patch_h // 5
+        x1  = x0 + patch_w * 3 // 5
+        y1  = y0 + patch_h * 3 // 5
+        roi = frame_bgr[y0:y1, x0:x1]
+        mean_bgr = cv2.mean(roi)[:3]
+        measured_rgb = (int(mean_bgr[2]), int(mean_bgr[1]), int(mean_bgr[0]))
+        delta = tuple(measured_rgb[i] - ref_rgb[i] for i in range(3))
+        results.append((name, ref_rgb, measured_rgb, delta))
+    return results
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Chart-Analyse
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,7 +469,9 @@ class VidCal(tk.Tk):
 
         tk.Label(f, text="Typ:", bg="#1e1e1e", fg="#d4d4d4").grid(row=row, column=0, padx=12, pady=4, sticky="w")
         self._tb_mode = ttk.Combobox(f, values=[
-            "EBU Bars 75%", "EBU Bars 100%", "SMPTE RP219 Bars", "Graukeil 16 Stufen", "Graukeil 32 Stufen"
+            "EBU Bars 75%", "EBU Bars 100%", "SMPTE RP219 Bars",
+            "Graukeil 16 Stufen", "Graukeil 32 Stufen",
+            "Macbeth ColorChecker",
         ], state="readonly", width=28)
         self._tb_mode.current(0)
         self._tb_mode.grid(row=row, column=1, padx=4, pady=4, sticky="w")
@@ -405,11 +509,12 @@ class VidCal(tk.Tk):
             "720×480 (NTSC)": (720, 480),
         }
         w, h = res_map.get(res_str, (1920, 1080))
-        if "75%" in mode:   return generate_ebu_bars(w, h, "75%")
-        if "100%" in mode:  return generate_ebu_bars(w, h, "100%")
-        if "SMPTE" in mode: return generate_smpte_bars(w, h)
-        if "16" in mode:    return generate_grey_ramp(w, h, 16)
-        if "32" in mode:    return generate_grey_ramp(w, h, 32)
+        if "75%" in mode:      return generate_ebu_bars(w, h, "75%")
+        if "100%" in mode:     return generate_ebu_bars(w, h, "100%")
+        if "SMPTE" in mode:    return generate_smpte_bars(w, h)
+        if "16" in mode:       return generate_grey_ramp(w, h, 16)
+        if "32" in mode:       return generate_grey_ramp(w, h, 32)
+        if "Macbeth" in mode:  return generate_macbeth_chart(w, h)
         return generate_ebu_bars(w, h)
 
     def _preview_testbild(self):
@@ -451,7 +556,7 @@ class VidCal(tk.Tk):
         self._src_mode.grid(row=1, column=1, padx=4, pady=4, sticky="w")
 
         tk.Label(f, text="Testbild-Typ:", bg="#1e1e1e", fg="#d4d4d4").grid(row=2, column=0, padx=12, pady=4, sticky="w")
-        self._an_mode = ttk.Combobox(f, values=["EBU 75%", "EBU 100%", "SMPTE RP219"],
+        self._an_mode = ttk.Combobox(f, values=["EBU 75%", "EBU 100%", "SMPTE RP219", "Macbeth ColorChecker"],
                                       state="readonly", width=32)
         self._an_mode.current(0)
         self._an_mode.grid(row=2, column=1, padx=4, pady=4, sticky="w")
@@ -508,7 +613,8 @@ class VidCal(tk.Tk):
                 return
 
         self._current_frame = frame
-        self._run_analysis(frame)
+        mode = self._an_mode.get()
+        self._run_analysis(frame, mode)
 
     def _live_analyze(self):
         messagebox.showinfo("Live-Analyse",
@@ -517,9 +623,13 @@ class VidCal(tk.Tk):
             "(z.B. mit OBS → Screenshot) und dann 'Frame laden' nutzen.\n\n"
             "Direktes DirectShow-Capturing folgt in einer späteren Version.")
 
-    def _run_analysis(self, frame):
-        mode = self._an_mode.get()
-        results = analyze_bars_from_frame(frame, mode)
+    def _run_analysis(self, frame, mode=None):
+        if mode is None:
+            mode = self._an_mode.get()
+        if "Macbeth" in mode:
+            results = analyze_macbeth_from_frame(frame)
+        else:
+            results = analyze_bars_from_frame(frame, mode)
         self._analysis_results = results
 
         # Tabelle befüllen
@@ -670,10 +780,29 @@ class VidCal(tk.Tk):
 
         tk.Label(f, text="Encoder-Ausgabe:", bg="#1e1e1e", fg="#d4d4d4").grid(row=4, column=0, padx=12, pady=4, sticky="w")
         self._avs_encoder = ttk.Combobox(f, values=[
-            "AVI (unkomprimiert / Lossless — Archiv)",
-            "MKV + H.264 (x264 via FFmpeg)",
-            "MKV + H.265 (x265 via FFmpeg)",
-        ], state="readonly", width=38)
+            # Lossless / Archiv
+            "AVI — unkomprimiert (YUY2)",
+            "AVI — FFV1 Lossless",
+            "MKV — FFV1 Lossless",
+            # Broadcast-Codecs
+            "MXF — DVCPro50 (IMX/DVCPRO50 via FFmpeg)",
+            "MXF — XDCAM HD422 (50 Mbit, via FFmpeg)",
+            "AVI — DV25 (IEC 61834)",
+            "AVI — DV50 / DVCPro50",
+            # Delivery H.264/H.265
+            "MKV — H.264 (x264, CRF 18)",
+            "MKV — H.264 (x264, CRF 23 — Web)",
+            "MKV — H.265 (x265, CRF 22)",
+            "MP4 — H.264 (x264, CRF 18)",
+            "MP4 — H.265 (x265, CRF 22)",
+            # ProRes (macOS/Cross-Platform)
+            "MOV — Apple ProRes 422",
+            "MOV — Apple ProRes 422 HQ",
+            "MOV — Apple ProRes 4444",
+            # DNxHD
+            "MXF — DNxHD 185x (1080p25)",
+            "MOV — DNxHD 185x (1080p25)",
+        ], state="readonly", width=46)
         self._avs_encoder.current(0)
         self._avs_encoder.grid(row=4, column=1, columnspan=2, padx=4, pady=4, sticky="w")
 
@@ -692,6 +821,99 @@ class VidCal(tk.Tk):
             filetypes=[("AVI", "*.avi"), ("MKV", "*.mkv")], title="Ausgabedatei")
         if p: self._avs_outvar.set(p)
 
+    def _build_ffmpeg_cmd(self, avs_path, out_base, enc, interlaced_out):
+        """Gibt den passenden FFmpeg-Befehl als Kommentar-String zurück."""
+        i_flag = "-flags +ildct+ilme -top 1 " if interlaced_out else ""
+
+        # Ausgabe-Extension anpassen
+        def out(ext): return str(Path(out_base).with_suffix(ext))
+
+        lines = ["\n\n# ═══ FFmpeg Encode-Befehl ═══"]
+
+        if "unkomprimiert" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v rawvideo -pix_fmt yuyv422 "{out(".avi")}"')
+
+        elif "FFV1" in enc and "AVI" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v ffv1 -level 3 "{out(".avi")}"')
+
+        elif "FFV1" in enc and "MKV" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v ffv1 -level 3 "{out(".mkv")}"')
+
+        elif "DVCPro50" in enc or "DV50" in enc:
+            lines += [
+                f'# DVCPro50 / DV50 — 50 Mbit/s, 4:2:2',
+                f'# ffmpeg -i "{avs_path}" -c:v dvvideo -pix_fmt yuv422p {i_flag}"{out(".avi")}"',
+                f'# Für MXF-Wrapping:',
+                f'# ffmpeg -i "{avs_path}" -c:v dvvideo -pix_fmt yuv422p -f mxf "{out(".mxf")}"',
+            ]
+
+        elif "DV25" in enc:
+            lines += [
+                f'# DV25 — 25 Mbit/s, 4:1:1 (NTSC) / 4:2:0 (PAL)',
+                f'# ffmpeg -i "{avs_path}" -c:v dvvideo -pix_fmt yuv420p {i_flag}"{out(".avi")}"',
+            ]
+
+        elif "XDCAM" in enc:
+            lines += [
+                f'# XDCAM HD422 — 50 Mbit/s, 4:2:2, 1080i',
+                f'# ffmpeg -i "{avs_path}" -c:v mpeg2video -b:v 50M -pix_fmt yuv422p \\',
+                f'#   -dc 10 -intra_vlc 1 -non_linear_quant 1 -qscale:v 1 \\',
+                f'#   {i_flag}-f mxf_opatom "{out(".mxf")}"',
+            ]
+
+        elif "H.264" in enc and "CRF 18" in enc and "MKV" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v libx264 -crf 18 -preset slow {i_flag}"{out(".mkv")}"')
+
+        elif "H.264" in enc and "CRF 23" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v libx264 -crf 23 -preset medium {i_flag}"{out(".mkv")}"')
+
+        elif "H.264" in enc and "MP4" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v libx264 -crf 18 -preset slow -movflags +faststart "{out(".mp4")}"')
+
+        elif "H.265" in enc and "MKV" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v libx265 -crf 22 -preset slow {i_flag}"{out(".mkv")}"')
+
+        elif "H.265" in enc and "MP4" in enc:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v libx265 -crf 22 -preset slow -movflags +faststart "{out(".mp4")}"')
+
+        elif "ProRes 422 HQ" in enc:
+            lines += [
+                f'# Apple ProRes 422 HQ',
+                f'# ffmpeg -i "{avs_path}" -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "{out(".mov")}"',
+            ]
+
+        elif "ProRes 4444" in enc:
+            lines += [
+                f'# Apple ProRes 4444',
+                f'# ffmpeg -i "{avs_path}" -c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le "{out(".mov")}"',
+            ]
+
+        elif "ProRes 422" in enc:
+            lines += [
+                f'# Apple ProRes 422',
+                f'# ffmpeg -i "{avs_path}" -c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le "{out(".mov")}"',
+            ]
+
+        elif "DNxHD" in enc and "MXF" in enc:
+            lines += [
+                f'# DNxHD 185x — 1080p25 / 1080i25',
+                f'# ffmpeg -i "{avs_path}" -c:v dnxhd -b:v 185M -pix_fmt yuv422p {i_flag}-f mxf "{out(".mxf")}"',
+            ]
+
+        elif "DNxHD" in enc and "MOV" in enc:
+            lines += [
+                f'# DNxHD 185x — 1080p25 / 1080i25',
+                f'# ffmpeg -i "{avs_path}" -c:v dnxhd -b:v 185M -pix_fmt yuv422p {i_flag}"{out(".mov")}"',
+            ]
+
+        else:
+            lines.append(f'# ffmpeg -i "{avs_path}" -c:v ffv1 "{out(".mkv")}"')
+
+        if interlaced_out:
+            lines.append("# Hinweis: Interlaced-Flags aktiv (-flags +ildct+ilme -top 1)")
+
+        return "\n".join(lines)
+
     def _generate_avs(self):
         lut = self._lut_path or "correction.cube"
         out = self._avs_outvar.get()
@@ -708,12 +930,7 @@ class VidCal(tk.Tk):
 
         # Encoder-Hinweis anhängen
         enc = self._avs_encoder.get()
-        if "H.264" in enc:
-            hint = f'\n\n# FFmpeg H.264 Befehl:\n# ffmpeg -i "{avs_path}" -c:v libx264 -crf 18 -preset slow "{out.replace(".avi",".mkv")}"'
-        elif "H.265" in enc:
-            hint = f'\n\n# FFmpeg H.265 Befehl:\n# ffmpeg -i "{avs_path}" -c:v libx265 -crf 22 -preset slow "{out.replace(".avi",".mkv")}"'
-        else:
-            hint = f'\n\n# Lossless AVI:\n# ffmpeg -i "{avs_path}" -c:v ffv1 "{out}"'
+        hint = self._build_ffmpeg_cmd(avs_path, out, enc, interlaced and not qtgmc)
         self._avs_text.insert("end", hint)
 
         messagebox.showinfo("Script gespeichert", f"AviSynth-Script gespeichert:\n{avs_path}")
