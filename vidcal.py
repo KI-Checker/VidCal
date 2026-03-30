@@ -414,36 +414,48 @@ def find_ffmpeg():
 def enumerate_video_devices():
     """
     Listet alle DirectShow Video-Geräte via FFmpeg auf.
-    Findet: Capture-Karten (Blackmagic, Magewell etc.),
-            IEEE 1394 / FireWire Geräte, USB-Capture, VirtualCam.
-    Gibt sortierte Liste von Gerätenamen zurück.
+    Gibt (devices_list, raw_output) zurück.
     """
+    import re
+
+    # Auf Windows: kein Console-Fenster öffnen (wichtig bei --windowed PyInstaller)
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
     devices = []
+    raw = ""
+    ffmpeg = find_ffmpeg()
+
     try:
         result = subprocess.run(
-            [find_ffmpeg(), "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
-            capture_output=True, text=True, timeout=8
+            [ffmpeg, "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            **kwargs
         )
         # FFmpeg schreibt Geräteliste nach stderr
-        output = result.stderr
+        raw = result.stderr.decode("utf-8", errors="replace")
+
         in_video = False
-        for line in output.splitlines():
-            # Abschnitt "DirectShow video devices"
+        for line in raw.splitlines():
             if "DirectShow video devices" in line:
                 in_video = True
                 continue
-            if "DirectShow audio devices" in line:
-                in_video = False
+            if "DirectShow audio devices" in line or "DirectShow video+audio devices" in line:
+                # video+audio Geräte auch erfassen
+                if "video+audio" in line:
+                    in_video = True
+                else:
+                    in_video = False
                 continue
             if in_video:
-                # Zeilen wie: [dshow @ ...] "Gerätename"
-                import re
                 m = re.search(r'"([^"]+)"', line)
-                if m and "Alternative name" not in line:
+                if m and "Alternative name" not in line and "@device" not in line:
                     name = m.group(1)
-                    # Typ-Kennzeichnung ergänzen
                     lower = name.lower()
-                    if any(k in lower for k in ["1394", "firewire", "dv", "ohci"]):
+                    if any(k in lower for k in ["1394", "firewire", "dv", "ohci", "msdv"]):
                         label = f"[IEEE 1394]  {name}"
                     elif any(k in lower for k in ["blackmagic", "intensity", "ultrastudio", "decklink"]):
                         label = f"[Blackmagic]  {name}"
@@ -451,19 +463,21 @@ def enumerate_video_devices():
                         label = f"[I/O Data]  {name}"
                     elif any(k in lower for k in ["cam link", "camlink", "elgato"]):
                         label = f"[Elgato]  {name}"
-                    elif any(k in lower for k in ["virtual", "obs", "vcam"]):
+                    elif any(k in lower for k in ["virtual", "obs", "vcam", "loopback"]):
                         label = f"[VirtualCam]  {name}"
                     elif any(k in lower for k in ["magewell", "aja", "matrox"]):
                         label = f"[Pro Capture]  {name}"
                     else:
                         label = f"[DirectShow]  {name}"
-                    devices.append(label)
+                    if label not in devices:
+                        devices.append(label)
+
     except FileNotFoundError:
-        # FFmpeg nicht gefunden
-        devices = []
-    except Exception:
-        devices = []
-    return devices
+        raw = f"FEHLER: FFmpeg nicht gefunden unter: {ffmpeg}"
+    except Exception as e:
+        raw = f"FEHLER: {e}"
+
+    return devices, raw
 
 def frame_to_photoimage(frame_bgr, max_w=900):
     from PIL import Image, ImageTk
@@ -553,8 +567,12 @@ class VidCal(tk.Tk):
         self._tb_device_cb = ttk.Combobox(f, textvariable=self._tb_device_var,
                                            state="readonly", width=46)
         self._tb_device_cb.grid(row=row, column=1, padx=4, pady=4, sticky="w")
-        tk.Button(f, text="🔄", command=self._refresh_devices,
-                  bg="#3c3c3c", fg="white", relief="flat", width=3).grid(row=row, column=2, padx=4)
+        btn_dev_frame = tk.Frame(f, bg="#1e1e1e")
+        btn_dev_frame.grid(row=row, column=2, padx=4, sticky="w")
+        tk.Button(btn_dev_frame, text="🔄", command=self._refresh_devices,
+                  bg="#3c3c3c", fg="white", relief="flat", width=3).pack(side="left", padx=2)
+        tk.Button(btn_dev_frame, text="🔍 Diagnose", command=self._show_device_diagnostics,
+                  bg="#3c3c3c", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         row += 1
 
         btn_frame = tk.Frame(f, bg="#1e1e1e")
@@ -618,7 +636,8 @@ class VidCal(tk.Tk):
         self.update_idletasks()
 
         def worker():
-            devices = enumerate_video_devices()
+            devices, raw = enumerate_video_devices()
+            self._last_ffmpeg_raw = raw  # für Diagnose
             def update():
                 if devices:
                     self._tb_device_cb["values"] = devices
@@ -629,10 +648,29 @@ class VidCal(tk.Tk):
                     self._tb_device_cb["values"] = ["(kein Gerät gefunden)"]
                     self._tb_device_cb.current(0)
                     self._tb_output_status.config(
-                        text="⚠️  Keine DirectShow-Geräte gefunden — FFmpeg installiert?")
+                        text="⚠️  Keine Geräte — 'Diagnose' für Details")
             self.after(0, update)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_device_diagnostics(self):
+        """Zeigt den rohen FFmpeg-Output zur Diagnose."""
+        raw = getattr(self, '_last_ffmpeg_raw', '(noch keine Suche durchgeführt)')
+        ffmpeg = find_ffmpeg()
+        win = tk.Toplevel(self)
+        win.title("FFmpeg Diagnose — DirectShow Geräte")
+        win.configure(bg="#1e1e1e")
+        win.geometry("800x500")
+        tk.Label(win, text=f"FFmpeg Pfad: {ffmpeg}",
+                 bg="#1e1e1e", fg="#4ec9b0", font=("Consolas", 9)).pack(anchor="w", padx=10, pady=(8,2))
+        tk.Label(win, text="Roher FFmpeg-Output (stderr):",
+                 bg="#1e1e1e", fg="#d4d4d4", font=("Segoe UI", 9)).pack(anchor="w", padx=10)
+        txt = tk.Text(win, bg="#111", fg="#d4d4d4", font=("Consolas", 8), wrap="none")
+        txt.pack(fill="both", expand=True, padx=10, pady=8)
+        txt.insert("end", raw if raw else "(kein Output — FFmpeg gefunden?)")
+        txt.config(state="disabled")
+        sb = ttk.Scrollbar(win, command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
 
     def _output_testbild(self):
         """Gibt das aktuelle Testbild als Vollbild-Loop an das gewählte Capture-Gerät aus."""
