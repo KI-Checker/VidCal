@@ -180,18 +180,24 @@ def generate_macbeth_chart(width=1920, height=1080):
         # Rahmen
         cv2.rectangle(img, (x0, y0), (x1, y1), (200, 200, 200), 1)
 
-        # Patch-Name (klein, unten im Patch)
+        # Patch-Name — Farbe je nach Helligkeit des Patches wählen
+        brightness = 0.299 * r + 0.587 * g + 0.114 * b
+        text_color = (20, 20, 20) if brightness > 100 else (235, 235, 235)
+        outline_color = (235, 235, 235) if brightness > 100 else (20, 20, 20)
         font_scale = max(0.28, patch_w / 480)
         text_y = y1 - 6
         cv2.putText(img, name, (x0 + 4, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, outline_color, 2)
         cv2.putText(img, name, (x0 + 4, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (240, 240, 240), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, 1)
 
-    # Titel
+    # Titel — immer gut lesbar auf dunklem Hintergrund
     cv2.putText(img, "Macbeth ColorChecker — D50 Reference (sRGB)",
                 (margin_x, margin_y - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (180, 180, 180), 1)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 20, 20), 3)
+    cv2.putText(img, "Macbeth ColorChecker — D50 Reference (sRGB)",
+                (margin_x, margin_y - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (240, 240, 240), 1)
     return img
 
 def analyze_macbeth_from_frame(frame_bgr, cols=6, rows=4):
@@ -582,14 +588,31 @@ class VidCal(tk.Tk):
                   bg="#3c3c3c", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         row += 1
 
+        # Sequenz-Dauer
+        tk.Label(f, text="Sequenzdauer:", bg="#1e1e1e", fg="#d4d4d4").grid(
+            row=row, column=0, padx=12, pady=4, sticky="w")
+        seq_frame = tk.Frame(f, bg="#1e1e1e")
+        seq_frame.grid(row=row, column=1, padx=4, pady=4, sticky="w")
+        self._tb_seq_dur = ttk.Combobox(seq_frame, values=["5", "10", "15", "20", "30"],
+                                         state="normal", width=6)
+        self._tb_seq_dur.set("10")
+        self._tb_seq_dur.pack(side="left")
+        tk.Label(seq_frame, text="Sek. pro Bild", bg="#1e1e1e", fg="#d4d4d4").pack(side="left", padx=6)
+        row += 1
+
         btn_frame = tk.Frame(f, bg="#1e1e1e")
         btn_frame.grid(row=row, column=0, columnspan=3, padx=10, pady=8, sticky="w")
         tk.Button(btn_frame, text="▶ Vorschau", command=self._preview_testbild,
                   bg="#007acc", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
         tk.Button(btn_frame, text="💾 Als PNG speichern", command=self._save_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="📤 An Capture-Board ausgeben", command=self._output_testbild,
+        tk.Button(btn_frame, text="📤 Ausgeben", command=self._output_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="🔁 Alle Testbilder ausgeben", command=self._output_all_testbilder,
+                  bg="#5a3e8a", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        self._tb_stop_btn = tk.Button(btn_frame, text="⏹ Stop", command=self._stop_output,
+                  bg="#8b0000", fg="white", relief="flat", padx=12, pady=4, state="disabled")
+        self._tb_stop_btn.pack(side="left", padx=4)
         row += 1
 
         self._tb_output_status = tk.Label(f, text="", bg="#1e1e1e", fg="#4ec9b0",
@@ -601,6 +624,9 @@ class VidCal(tk.Tk):
         self._tb_canvas.grid(row=row, column=0, columnspan=3, padx=10, pady=8, sticky="nsew")
         f.rowconfigure(row, weight=1)
         f.columnconfigure(2, weight=1)
+
+        self._output_proc   = None   # laufender FFmpeg-Prozess
+        self._output_thread = None   # Sequenz-Thread
 
         # Geräte beim Start laden
         self.after(300, self._refresh_devices)
@@ -678,6 +704,132 @@ class VidCal(tk.Tk):
         txt.config(state="disabled")
         sb = ttk.Scrollbar(win, command=txt.yview)
         txt.configure(yscrollcommand=sb.set)
+
+    def _stop_output(self):
+        """Stoppt laufenden FFmpeg-Ausgabeprozess."""
+        if self._output_proc and self._output_proc.poll() is None:
+            self._output_proc.terminate()
+            try:
+                self._output_proc.wait(timeout=3)
+            except:
+                self._output_proc.kill()
+        self._output_proc = None
+        self._tb_stop_btn.config(state="disabled")
+        self._tb_output_status.config(text="⏹ Ausgabe gestoppt")
+
+    def _build_ffmpeg_output_cmd(self, tmp_png, device_name, device_type, res, fps):
+        """Baut den korrekten FFmpeg-Ausgabe-Befehl je nach Gerätetyp."""
+        ffmpeg = find_ffmpeg()
+
+        if "Blackmagic" in device_type or "decklink" in device_name.lower():
+            # Blackmagic DeckLink: nativer decklink-Output-Treiber
+            return (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f decklink -s {res} -r {fps} '
+                f'-pix_fmt uyvy422 '
+                f'"{device_name}"'
+            ), "Blackmagic DeckLink Output"
+
+        elif "IEEE 1394" in device_type:
+            # IEEE 1394 / FireWire: Video als Rohvideo, Ausgabe via dshow
+            # dv1394 funktioniert nur auf Linux — auf Windows: rawvideo über dshow
+            return (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-vf "scale={res},fps={fps},format=yuv420p" '
+                f'-f rawvideo -pix_fmt yuv420p pipe:1 | '
+                f'"{ffmpeg}" -f rawvideo -pix_fmt yuv420p -s {res} -r {fps} -i pipe:0 '
+                f'-c:v dvvideo -pix_fmt dv -f dshow -y "video={device_name}"'
+            ), "IEEE 1394 DV Output (via DirectShow)"
+
+        elif "Virtual" in device_type or "NDI" in device_type:
+            return (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f dshow -video_size {res} -r {fps} '
+                f'-vcodec rawvideo -pix_fmt yuyv422 '
+                f'-y "video={device_name}"'
+            ), "DirectShow Virtual Output"
+
+        else:
+            return (
+                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
+                f'-f dshow -video_size {res} -r {fps} '
+                f'-vcodec rawvideo -pix_fmt yuyv422 '
+                f'-y "video={device_name}"'
+            ), "DirectShow Output"
+
+    def _output_all_testbilder(self):
+        """Spielt alle Testbilder nacheinander aus (je N Sekunden)."""
+        device = self._tb_device_var.get()
+        if not device or "kein Gerät" in device or "geladen" in device:
+            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein Ausgabe-Gerät wählen.")
+            return
+
+        try:
+            duration = int(self._tb_seq_dur.get())
+        except ValueError:
+            duration = 10
+
+        import re as _re
+        m_dev = _re.match(r'\[.*?\]\s+(.*)', device)
+        device_name = m_dev.group(1).strip() if m_dev else device.strip()
+        m_typ = _re.match(r'\[(.*?)\]', device)
+        device_type = m_typ.group(1) if m_typ else ""
+
+        res_map = {
+            "1920×1080": ("1920x1080","25"), "1280×720":  ("1280x720","25"),
+            "720×576 (PAL)": ("720x576","25"), "720×480 (NTSC)": ("720x480","29.97"),
+        }
+        res, fps = res_map.get(self._tb_res.get(), ("1920x1080","25"))
+
+        testbilder = [
+            ("EBU Bars 75%",        lambda: generate_ebu_bars(*map(int,res.split("x")), "75%")),
+            ("EBU Bars 100%",       lambda: generate_ebu_bars(*map(int,res.split("x")), "100%")),
+            ("SMPTE RP219 Bars",    lambda: generate_smpte_bars(*map(int,res.split("x")))),
+            ("Graukeil 16 Stufen",  lambda: generate_grey_ramp(*map(int,res.split("x")), 16)),
+            ("Graukeil 32 Stufen",  lambda: generate_grey_ramp(*map(int,res.split("x")), 32)),
+            ("Macbeth ColorChecker",lambda: generate_macbeth_chart(*map(int,res.split("x")))),
+        ]
+
+        if not messagebox.askyesno("Alle Testbilder ausgeben",
+            f"Alle {len(testbilder)} Testbilder ausgeben?\n"
+            f"Gerät: {device_name}\n"
+            f"Je {duration} Sekunden\n"
+            f"Gesamt: ~{len(testbilder)*duration} Sekunden"):
+            return
+
+        self._tb_stop_btn.config(state="normal")
+
+        def run_sequence():
+            import tempfile, time
+            for name, gen_fn in testbilder:
+                if self._output_proc == "STOPPED":
+                    break
+                self.after(0, lambda n=name: self._tb_output_status.config(
+                    text=f"▶ Ausgabe: {n} ({duration}s) → {device_name}"))
+                frame = gen_fn()
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                cv2.imwrite(tmp.name, frame)
+                tmp.close()
+                cmd, _ = self._build_ffmpeg_output_cmd(tmp.name, device_name, device_type, res, fps)
+                # Begrenzter Loop: duration Sekunden
+                timed_cmd = cmd.replace("-loop 1", f"-t {duration} -loop 1")
+                proc = subprocess.Popen(
+                    timed_cmd, shell=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
+                )
+                self._output_proc = proc
+                proc.wait()
+                try:
+                    os.unlink(tmp.name)
+                except:
+                    pass
+            self._output_proc = None
+            self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
+            self.after(0, lambda: self._tb_output_status.config(text="✅ Sequenz abgeschlossen"))
+
+        self._output_proc = None
+        self._output_thread = threading.Thread(target=run_sequence, daemon=True)
+        self._output_thread.start()
 
     def _show_device_params(self):
         """Zeigt und bearbeitet die DirectShow-Parameter des gewählten Geräts."""
@@ -837,67 +989,28 @@ class VidCal(tk.Tk):
         ffmpeg = find_ffmpeg()
 
         # Ausgabe-Methode je nach Gerätetyp
-        if "Blackmagic" in device_type or "decklink" in device_name.lower():
-            # Blackmagic: FFmpeg decklink Output-Treiber
-            cmd = (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-f decklink '
-                f'-s {res} -r {fps} '
-                f'-pix_fmt uyvy422 '
-                f'"{device_name}"'
-            )
-            method = "Blackmagic DeckLink Output"
-        elif "IEEE 1394" in device_type:
-            # IEEE 1394 DV: Ausgabe als DV-Stream via FireWire
-            cmd = (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-f dv1394 '
-                f'-s {res} -r {fps} '
-                f'-pix_fmt yuv420p '
-                f'"{device_name}"'
-            )
-            method = "IEEE 1394 / FireWire DV Output"
-        elif "Virtual" in device_type or "NDI" in device_type:
-            # VirtualCam / NDI: DirectShow Output
-            cmd = (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-f dshow '
-                f'-video_size {res} -r {fps} '
-                f'-vcodec rawvideo -pix_fmt yuyv422 '
-                f'-y "video={device_name}"'
-            )
-            method = "DirectShow Virtual Output"
-        else:
-            # Generisch: DirectShow
-            cmd = (
-                f'"{ffmpeg}" -loop 1 -re -i "{tmp_png}" '
-                f'-f dshow '
-                f'-video_size {res} -r {fps} '
-                f'-vcodec rawvideo -pix_fmt yuyv422 '
-                f'-y "video={device_name}"'
-            )
-            method = "DirectShow Output"
+        cmd, method = self._build_ffmpeg_output_cmd(tmp_png, device_name, device_type, res, fps)
 
         info = (
-            f"Gerät:    {device_name}\n"
-            f"Methode:  {method}\n"
+            f"Gerät:     {device_name}\n"
+            f"Methode:   {method}\n"
             f"Auflösung: {res} @ {fps} fps\n\n"
             f"FFmpeg-Befehl:\n{cmd}\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Workflow für Kalibrierung:\n"
-            "1. Testbild über Karte ausgeben\n"
-            "2. Am analogen Gerät aufnehmen (z.B. VHS, BetaSP)\n"
-            "3. Band abspielen → Karte als Eingang\n"
-            "4. Frame in VidCal laden → Analyse\n"
-            "5. LUT generieren → Farbkorrektur fertig"
+            "Workflow Kalibrierung:\n"
+            "1. Testbild ausgeben → auf analogen Rekorder aufnehmen\n"
+            "2. Band abspielen → Frame in VidCal laden → Analyse\n"
+            "3. LUT generieren → Farbkorrektur fertig"
         )
         if messagebox.askyesno("Testbild ausgeben", info + "\n\nJetzt starten?"):
+            self._stop_output()  # vorherigen Prozess stoppen
             self._output_proc = subprocess.Popen(
                 cmd, shell=True,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform=="win32" else 0
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=="win32" else 0
             )
+            self._tb_stop_btn.config(state="normal")
             self._tb_output_status.config(
-                text=f"▶ Ausgabe läuft → {device_name} ({res})   [Fenster schließen = Stop]")
+                text=f"▶ Ausgabe läuft → {device_name} ({res})   [⏹ Stop zum Beenden]")
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
