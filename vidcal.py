@@ -526,6 +526,16 @@ class VidCal(tk.Tk):
         style.configure("TLabel", background="#1e1e1e", foreground="#d4d4d4")
         style.configure("TButton", background="#3c3c3c", foreground="white")
         style.configure("TCombobox", fieldbackground="#2d2d2d", foreground="white")
+        style.configure("Blue.TCombobox",
+                        fieldbackground="#1a2a3a",
+                        foreground="#4fc3f7",
+                        selectbackground="#1a2a3a",
+                        selectforeground="#4fc3f7")
+        style.map("Blue.TCombobox",
+                  fieldbackground=[("readonly","#1a2a3a")],
+                  foreground=[("readonly","#4fc3f7")],
+                  selectbackground=[("readonly","#1a2a3a")],
+                  selectforeground=[("readonly","#4fc3f7")])
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
@@ -561,14 +571,14 @@ class VidCal(tk.Tk):
             "EBU Bars 75%", "EBU Bars 100%", "SMPTE RP219 Bars",
             "Graukeil 16 Stufen", "Graukeil 32 Stufen",
             "Macbeth ColorChecker",
-        ], state="readonly", width=28)
+        ], state="readonly", width=28, style="Blue.TCombobox")
         self._tb_mode.current(0)
         self._tb_mode.grid(row=row, column=1, padx=4, pady=4, sticky="w")
         row += 1
 
         tk.Label(f, text="Auflösung:", bg="#1e1e1e", fg="#d4d4d4").grid(row=row, column=0, padx=12, pady=4, sticky="w")
         self._tb_res = ttk.Combobox(f, values=["1920×1080", "1280×720", "720×576 (PAL)", "720×480 (NTSC)"],
-                                     state="readonly", width=28)
+                                     state="readonly", width=28, style="Blue.TCombobox")
         self._tb_res.current(0)
         self._tb_res.grid(row=row, column=1, padx=4, pady=4, sticky="w")
         row += 1
@@ -578,7 +588,7 @@ class VidCal(tk.Tk):
             row=row, column=0, padx=12, pady=4, sticky="w")
         self._tb_device_var = tk.StringVar(value="— Geräte werden geladen… —")
         self._tb_device_cb = ttk.Combobox(f, textvariable=self._tb_device_var,
-                                           state="readonly", width=46)
+                                           state="readonly", width=46, style="Blue.TCombobox")
         self._tb_device_cb.grid(row=row, column=1, padx=4, pady=4, sticky="w")
         btn_dev_frame = tk.Frame(f, bg="#1e1e1e")
         btn_dev_frame.grid(row=row, column=2, padx=4, sticky="w")
