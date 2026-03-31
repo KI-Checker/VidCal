@@ -972,14 +972,19 @@ class VidCal(tk.Tk):
         mode = self._tb_out_mode.get()
         if mode == "datei":
             self._tb_file_frame.grid()
+            # Band-Sequenz-Checkbox sperren (nicht relevant im Datei-Modus)
             self._tb_seq_check.config(state="disabled")
-            self._tb_seq_btn.config(state="disabled", bg="#444", fg="#888")
-            self._tb_out_btn.config(text="💾 Als Datei exportieren", bg="#007acc")
+            self._tb_seq_dur.config(state="disabled")
+            # Sequenz-Button bleibt aktiv → exportiert alle Testbilder als Dateien
+            self._tb_seq_btn.config(state="normal", bg="#007acc", fg="white",
+                                     text="🔁 Alle als Dateien exportieren")
+            self._tb_out_btn.config(text="💾 Aktuelles Bild exportieren", bg="#007acc")
         else:
             self._tb_file_frame.grid_remove()
             self._tb_seq_check.config(state="normal")
-            self._toggle_seq_controls()
+            self._tb_seq_btn.config(text="🔁 Sequenz starten")
             self._tb_out_btn.config(text="📼 Auf Band ausgeben", bg="#5a3e8a")
+            self._toggle_seq_controls()
 
     def _browse_output_dir(self):
         """Verzeichnis für Datei-Export auswählen."""
@@ -1060,8 +1065,10 @@ class VidCal(tk.Tk):
             ), "DirectShow Output"
 
     def _output_all_testbilder(self):
-        """Spielt alle Testbilder nacheinander auf Band aus (je N Sekunden)."""
+        """Spielt alle Testbilder nacheinander aus — Band oder Datei je nach Modus."""
         if self._tb_out_mode.get() == "datei":
+            # Im Datei-Modus: Sequenz-Checkbox erzwingen und alle exportieren
+            self._tb_seq_file_enabled.set(True)
             self._export_testbild_datei()
             return
         device = self._tb_device_var.get()
