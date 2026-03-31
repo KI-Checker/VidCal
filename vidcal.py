@@ -635,7 +635,74 @@ class VidCal(tk.Tk):
                   bg="#3c3c3c", fg="white", relief="flat", padx=6).pack(side="left", padx=2)
         row += 1
 
-        # Sequenz-Aktivierung + Dauer
+        # ── Ausgabe-Modus ──
+        mode_frame = tk.LabelFrame(f, text=" Ausgabe-Modus ", bg="#1e1e1e", fg="#4ec9b0",
+                                    font=("Segoe UI", 9), relief="groove", bd=1,
+                                    highlightthickness=0)
+        mode_frame.grid(row=row, column=0, columnspan=3, padx=10, pady=(6,4), sticky="ew")
+        row += 1
+
+        self._tb_out_mode = tk.StringVar(value="band")
+        tk.Radiobutton(mode_frame, text="📼  Ausgeben auf Band  (Capture-Gerät)",
+                       variable=self._tb_out_mode, value="band",
+                       command=self._toggle_output_mode,
+                       bg="#1e1e1e", fg="#d4d4d4", selectcolor="#3c3c3c",
+                       activebackground="#1e1e1e", activeforeground="white",
+                       font=("Segoe UI", 10)).grid(row=0, column=0, padx=12, pady=4, sticky="w")
+        tk.Radiobutton(mode_frame, text="💾  Ausgeben als Datei  (AVI/MKV/PNG)",
+                       variable=self._tb_out_mode, value="datei",
+                       command=self._toggle_output_mode,
+                       bg="#1e1e1e", fg="#d4d4d4", selectcolor="#3c3c3c",
+                       activebackground="#1e1e1e", activeforeground="white",
+                       font=("Segoe UI", 10)).grid(row=0, column=1, padx=12, pady=4, sticky="w")
+
+        # ── Datei-Optionen (nur sichtbar bei Modus "datei") ──
+        self._tb_file_frame = tk.Frame(mode_frame, bg="#1e1e1e")
+        self._tb_file_frame.grid(row=1, column=0, columnspan=3, padx=8, pady=(0,6), sticky="ew")
+
+        tk.Label(self._tb_file_frame, text="Verzeichnis:", bg="#1e1e1e", fg="#d4d4d4",
+                 width=12, anchor="w").grid(row=0, column=0, padx=(4,4), pady=3, sticky="w")
+        self._tb_out_dir = tk.StringVar(value=str(Path.home() / "Desktop"))
+        tk.Entry(self._tb_file_frame, textvariable=self._tb_out_dir,
+                 bg="#2d2d2d", fg="white", width=38).grid(row=0, column=1, padx=4, pady=3, sticky="w")
+        tk.Button(self._tb_file_frame, text="📂", command=self._browse_output_dir,
+                  bg="#3c3c3c", fg="white", relief="flat", padx=6).grid(row=0, column=2, padx=4)
+
+        tk.Label(self._tb_file_frame, text="Dateiformat:", bg="#1e1e1e", fg="#d4d4d4",
+                 width=12, anchor="w").grid(row=1, column=0, padx=(4,4), pady=3, sticky="w")
+        self._tb_out_fmt = ttk.Combobox(self._tb_file_frame, values=[
+            "PNG  (Standbild, verlustfrei)",
+            "BMP  (Standbild, verlustfrei)",
+            "AVI — FFV1 Lossless",
+            "AVI — DV25",
+            "AVI — DVCPro50",
+            "MKV — FFV1 Lossless",
+            "MKV — H.264 (CRF 18)",
+            "MKV — H.265 (CRF 22)",
+        ], state="readonly", width=34)
+        self._tb_out_fmt.current(0)
+        self._tb_out_fmt.grid(row=1, column=1, padx=4, pady=3, sticky="w")
+
+        # Sequenz-Optionen in Datei-Frame
+        seq_datei_frame = tk.Frame(self._tb_file_frame, bg="#1e1e1e")
+        seq_datei_frame.grid(row=2, column=0, columnspan=3, pady=(4,0), sticky="w")
+        self._tb_seq_file_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(seq_datei_frame, text="Alle Testbilder als Sequenz exportieren",
+                       variable=self._tb_seq_file_enabled,
+                       bg="#1e1e1e", fg="#d4d4d4", selectcolor="#3c3c3c",
+                       activebackground="#1e1e1e", activeforeground="white").pack(side="left", padx=(0,16))
+        tk.Label(seq_datei_frame, text="Videodauer pro Bild:", bg="#1e1e1e", fg="#888").pack(side="left")
+        self._tb_seq_file_dur = ttk.Combobox(seq_datei_frame,
+                                              values=["5", "10", "15", "20", "30"],
+                                              state="normal", width=5)
+        self._tb_seq_file_dur.set("10")
+        self._tb_seq_file_dur.pack(side="left", padx=4)
+        tk.Label(seq_datei_frame, text="Sek.", bg="#1e1e1e", fg="#888").pack(side="left")
+
+        # Datei-Optionen initial ausblenden
+        self._tb_file_frame.grid_remove()
+
+        # ── Sequenz-Aktivierung + Dauer (Band-Modus) ──
         seq_row_frame = tk.Frame(f, bg="#1e1e1e")
         seq_row_frame.grid(row=row, column=0, columnspan=3, padx=10, pady=4, sticky="w")
 
@@ -667,8 +734,10 @@ class VidCal(tk.Tk):
                   bg="#007acc", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
         tk.Button(btn_frame, text="💾 Als PNG speichern", command=self._save_testbild,
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="📤 Ausgeben", command=self._output_testbild,
-                  bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
+        self._tb_out_btn = tk.Button(btn_frame, text="📼 Auf Band ausgeben",
+                  command=self._output_testbild,
+                  bg="#5a3e8a", fg="white", relief="flat", padx=12, pady=4)
+        self._tb_out_btn.pack(side="left", padx=4)
         self._tb_seq_btn = tk.Button(btn_frame, text="🔁 Sequenz starten",
                   command=self._output_all_testbilder,
                   bg="#444", fg="#888", relief="flat", padx=12, pady=4, state="disabled")
@@ -898,6 +967,27 @@ class VidCal(tk.Tk):
             self._log(f"EXCEPTION: {e}", "ERR")
             return None
 
+    def _toggle_output_mode(self):
+        """Schaltet zwischen Band- und Datei-Modus um."""
+        mode = self._tb_out_mode.get()
+        if mode == "datei":
+            self._tb_file_frame.grid()
+            self._tb_seq_check.config(state="disabled")
+            self._tb_seq_btn.config(state="disabled", bg="#444", fg="#888")
+            self._tb_out_btn.config(text="💾 Als Datei exportieren", bg="#007acc")
+        else:
+            self._tb_file_frame.grid_remove()
+            self._tb_seq_check.config(state="normal")
+            self._toggle_seq_controls()
+            self._tb_out_btn.config(text="📼 Auf Band ausgeben", bg="#5a3e8a")
+
+    def _browse_output_dir(self):
+        """Verzeichnis für Datei-Export auswählen."""
+        d = filedialog.askdirectory(title="Ausgabe-Verzeichnis wählen",
+                                    initialdir=self._tb_out_dir.get())
+        if d:
+            self._tb_out_dir.set(d)
+
     def _stop_output(self):
         """Stoppt laufenden FFmpeg-Ausgabeprozess."""
         if self._output_proc and self._output_proc.poll() is None:
@@ -970,7 +1060,10 @@ class VidCal(tk.Tk):
             ), "DirectShow Output"
 
     def _output_all_testbilder(self):
-        """Spielt alle Testbilder nacheinander aus (je N Sekunden)."""
+        """Spielt alle Testbilder nacheinander auf Band aus (je N Sekunden)."""
+        if self._tb_out_mode.get() == "datei":
+            self._export_testbild_datei()
+            return
         device = self._tb_device_var.get()
         if not device or "kein Gerät" in device or "geladen" in device:
             messagebox.showwarning("Kein Gerät", "Bitte zuerst ein Ausgabe-Gerät wählen.")
@@ -1178,7 +1271,13 @@ class VidCal(tk.Tk):
                   bg="#3c3c3c", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=4)
 
     def _output_testbild(self):
-        """Gibt das aktuelle Testbild als Vollbild-Loop an das gewählte Capture-Gerät aus."""
+        """Gibt das aktuelle Testbild auf Band ODER als Datei aus."""
+        mode = self._tb_out_mode.get()
+        if mode == "datei":
+            self._export_testbild_datei()
+            return
+
+        # ── Band-Modus ──
         frame = self._get_testbild_frame()
         device = self._tb_device_var.get()
         if not device or "kein Gerät" in device or "geladen" in device:
@@ -1258,6 +1357,130 @@ class VidCal(tk.Tk):
             self._tb_stop_btn.config(state="normal")
             self._tb_output_status.config(
                 text=f"▶ Ausgabe läuft → {device_name} ({res})   [⏹ Stop zum Beenden]")
+
+    def _export_testbild_datei(self):
+        """Exportiert aktuelles Testbild (oder Sequenz) als Datei ins gewählte Verzeichnis."""
+        out_dir = self._tb_out_dir.get().strip()
+        if not out_dir or not os.path.isdir(out_dir):
+            messagebox.showwarning("Kein Verzeichnis",
+                "Bitte zuerst ein gültiges Ausgabe-Verzeichnis wählen.")
+            return
+
+        fmt = self._tb_out_fmt.get()
+        seq_all = self._tb_seq_file_enabled.get()
+
+        # Auflösung
+        res_map = {
+            "1920×1080": (1920, 1080, "25"),
+            "1280×720":  (1280, 720,  "25"),
+            "720×576 (PAL)":  (720, 576, "25"),
+            "720×480 (NTSC)": (720, 480, "29.97"),
+        }
+        w, h, fps = res_map.get(self._tb_res.get(), (1920, 1080, "25"))
+        res = f"{w}x{h}"
+
+        # Alle Testbilder oder nur das aktuelle
+        if seq_all:
+            testbilder = [
+                ("EBU_Bars_75",         lambda: generate_ebu_bars(w, h, "75%")),
+                ("EBU_Bars_100",        lambda: generate_ebu_bars(w, h, "100%")),
+                ("SMPTE_RP219_Bars",    lambda: generate_smpte_bars(w, h)),
+                ("Graukeil_16_Stufen",  lambda: generate_grey_ramp(w, h, 16)),
+                ("Graukeil_32_Stufen",  lambda: generate_grey_ramp(w, h, 32)),
+                ("Macbeth_ColorChecker",lambda: generate_macbeth_chart(w, h)),
+            ]
+        else:
+            mode_label = self._tb_mode.get().replace(" ", "_").replace("/", "-")
+            testbilder = [(mode_label, self._get_testbild_frame)]
+
+        is_image = fmt.startswith("PNG") or fmt.startswith("BMP")
+        ext_map = {
+            "PNG": ".png", "BMP": ".bmp",
+            "AVI": ".avi", "MKV": ".mkv",
+        }
+        ext = ".png"
+        for k, v in ext_map.items():
+            if k in fmt:
+                ext = v
+                break
+
+        if is_image:
+            # Standbild(er) exportieren
+            saved = []
+            for name, gen_fn in testbilder:
+                frame = gen_fn()
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = os.path.join(out_dir, f"VidCal_{name}_{res}_{ts}{ext}")
+                cv2.imwrite(out_path, frame)
+                saved.append(out_path)
+                self._log(f"Exportiert: {out_path}", "OK")
+
+            messagebox.showinfo("Export abgeschlossen",
+                f"✅ {len(saved)} Datei(en) exportiert nach:\n{out_dir}\n\n" +
+                "\n".join(os.path.basename(p) for p in saved))
+        else:
+            # Video-Export per FFmpeg (je Testbild eine Datei)
+            try:
+                dur = int(self._tb_seq_file_dur.get())
+            except ValueError:
+                dur = 10
+
+            ffmpeg = find_ffmpeg()
+
+            # Codec-Mapping
+            codec_map = {
+                "AVI — FFV1 Lossless":  ("-c:v ffv1 -level 3",              ".avi"),
+                "AVI — DV25":           ("-c:v dvvideo -pix_fmt yuv420p",    ".avi"),
+                "AVI — DVCPro50":       ("-c:v dvvideo -pix_fmt yuv422p",    ".avi"),
+                "MKV — FFV1 Lossless":  ("-c:v ffv1 -level 3",              ".mkv"),
+                "MKV — H.264 (CRF 18)": ("-c:v libx264 -crf 18 -preset slow",".mkv"),
+                "MKV — H.265 (CRF 22)": ("-c:v libx265 -crf 22 -preset slow",".mkv"),
+            }
+            codec_flags, real_ext = codec_map.get(fmt, ("-c:v ffv1", ".avi"))
+
+            self._show_log()
+            self._tb_stop_btn.config(state="normal")
+
+            def run_export():
+                import tempfile as _tmp
+                total = len(testbilder)
+                for idx, (name, gen_fn) in enumerate(testbilder):
+                    if self._output_proc == "STOPPED":
+                        break
+                    self.after(0, lambda n=name, i=idx: self._tb_output_status.config(
+                        text=f"💾 Exportiere {i+1}/{total}: {n}…"))
+
+                    frame = gen_fn()
+                    tmp_png = os.path.join(_tmp.gettempdir(), f"vidcal_export_{name}.png")
+                    cv2.imwrite(tmp_png, frame)
+
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    out_path = os.path.join(out_dir, f"VidCal_{name}_{res}_{ts}{real_ext}")
+
+                    cmd = (
+                        f'"{ffmpeg}" -y -loop 1 -t {dur} -i "{tmp_png}" '
+                        f'-vf "scale={res},fps={fps}" '
+                        f'{codec_flags} "{out_path}"'
+                    )
+                    proc = self._run_ffmpeg_logged(cmd, f"Export: {name}")
+                    self._output_proc = proc
+                    if proc:
+                        proc.wait()
+                    try:
+                        os.unlink(tmp_png)
+                    except:
+                        pass
+
+                self._output_proc = None
+                self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
+                self.after(0, lambda: self._tb_output_status.config(
+                    text=f"✅ Export abgeschlossen → {out_dir}"))
+                self.after(0, lambda: messagebox.showinfo("Export abgeschlossen",
+                    f"✅ {total} Datei(en) exportiert nach:\n{out_dir}"))
+
+            self._output_proc = None
+            self._output_thread = threading.Thread(target=run_export, daemon=True)
+            self._output_thread.start()
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
