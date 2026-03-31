@@ -676,6 +676,9 @@ class VidCal(tk.Tk):
             "AVI — FFV1 Lossless",
             "AVI — DV25",
             "AVI — DVCPro50",
+            "MOV — Apple ProRes 422",
+            "MOV — Apple ProRes 422 HQ",
+            "MOV — Apple ProRes 4444",
             "MKV — FFV1 Lossless",
             "MKV — H.264 (CRF 18)",
             "MKV — H.265 (CRF 22)",
@@ -1401,23 +1404,41 @@ class VidCal(tk.Tk):
             testbilder = [(mode_label, self._get_testbild_frame)]
 
         is_image = fmt.startswith("PNG") or fmt.startswith("BMP")
+
+        # Extension je Format
         ext_map = {
             "PNG": ".png", "BMP": ".bmp",
-            "AVI": ".avi", "MKV": ".mkv",
+            "AVI": ".avi", "MKV": ".mkv", "MOV": ".mov",
         }
         ext = ".png"
         for k, v in ext_map.items():
-            if k in fmt:
+            if fmt.startswith(k):
                 ext = v
                 break
 
+        # Codec-Mapping für Video
+        codec_map = {
+            "AVI — FFV1 Lossless":      ("-c:v ffv1 -level 3",                                    ".avi"),
+            "AVI — DV25":               ("-c:v dvvideo -pix_fmt yuv420p",                          ".avi"),
+            "AVI — DVCPro50":           ("-c:v dvvideo -pix_fmt yuv422p",                          ".avi"),
+            "MOV — Apple ProRes 422":   ("-c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le",       ".mov"),
+            "MOV — Apple ProRes 422 HQ":("-c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le",       ".mov"),
+            "MOV — Apple ProRes 4444":  ("-c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le",      ".mov"),
+            "MKV — FFV1 Lossless":      ("-c:v ffv1 -level 3",                                    ".mkv"),
+            "MKV — H.264 (CRF 18)":    ("-c:v libx264 -crf 18 -preset slow",                      ".mkv"),
+            "MKV — H.265 (CRF 22)":    ("-c:v libx265 -crf 22 -preset slow",                      ".mkv"),
+        }
+        codec_flags, real_ext = codec_map.get(fmt, ("-c:v ffv1", ".avi"))
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         if is_image:
-            # Standbild(er) exportieren
+            # ── Standbild-Export ─────────────────────────────────────────────
+            # Sequenz → einzelne PNG/BMP-Dateien (macht hier Sinn, 1 Datei pro Motiv)
             saved = []
             for name, gen_fn in testbilder:
                 frame = gen_fn()
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_path = os.path.join(out_dir, f"VidCal_{name}_{res}_{ts}{ext}")
+                out_path = os.path.join(out_dir, f"VidCal_{name}_{res}{ext}")
                 cv2.imwrite(out_path, frame)
                 saved.append(out_path)
                 self._log(f"Exportiert: {out_path}", "OK")
@@ -1425,8 +1446,9 @@ class VidCal(tk.Tk):
             messagebox.showinfo("Export abgeschlossen",
                 f"✅ {len(saved)} Datei(en) exportiert nach:\n{out_dir}\n\n" +
                 "\n".join(os.path.basename(p) for p in saved))
+
         else:
-            # Video-Export per FFmpeg (je Testbild eine Datei)
+            # ── Video-Export ─────────────────────────────────────────────────
             try:
                 dur = int(self._tb_seq_file_dur.get())
             except ValueError:
@@ -1434,35 +1456,103 @@ class VidCal(tk.Tk):
 
             ffmpeg = find_ffmpeg()
 
-            # Codec-Mapping
-            codec_map = {
-                "AVI — FFV1 Lossless":  ("-c:v ffv1 -level 3",              ".avi"),
-                "AVI — DV25":           ("-c:v dvvideo -pix_fmt yuv420p",    ".avi"),
-                "AVI — DVCPro50":       ("-c:v dvvideo -pix_fmt yuv422p",    ".avi"),
-                "MKV — FFV1 Lossless":  ("-c:v ffv1 -level 3",              ".mkv"),
-                "MKV — H.264 (CRF 18)": ("-c:v libx264 -crf 18 -preset slow",".mkv"),
-                "MKV — H.265 (CRF 22)": ("-c:v libx265 -crf 22 -preset slow",".mkv"),
-            }
-            codec_flags, real_ext = codec_map.get(fmt, ("-c:v ffv1", ".avi"))
+            if seq_all:
+                # ── SEQUENZ: eine einzige Datei mit allen Testbildern ────────
+                out_path = os.path.join(out_dir, f"VidCal_Sequenz_{res}_{ts}{real_ext}")
 
-            self._show_log()
-            self._tb_stop_btn.config(state="normal")
+                self._show_log()
+                self._tb_stop_btn.config(state="normal")
 
-            def run_export():
-                import tempfile as _tmp
-                total = len(testbilder)
-                for idx, (name, gen_fn) in enumerate(testbilder):
+                def run_sequence_export():
+                    import tempfile as _tmp
+                    total = len(testbilder)
+                    tmp_files = []
+
+                    # Schritt 1: Jedes Testbild als kurzes Video rendern
+                    segment_paths = []
+                    for idx, (name, gen_fn) in enumerate(testbilder):
+                        if self._output_proc == "STOPPED":
+                            break
+                        self.after(0, lambda n=name, i=idx: self._tb_output_status.config(
+                            text=f"💾 Rendere Segment {i+1}/{total}: {n}…"))
+
+                        frame = gen_fn()
+                        tmp_png = os.path.join(_tmp.gettempdir(), f"vidcal_seq_{idx}_{name}.png")
+                        cv2.imwrite(tmp_png, frame)
+                        tmp_files.append(tmp_png)
+
+                        seg_path = os.path.join(_tmp.gettempdir(), f"vidcal_seg_{idx}{real_ext}")
+                        segment_paths.append(seg_path)
+                        tmp_files.append(seg_path)
+
+                        cmd = (
+                            f'"{ffmpeg}" -y -loop 1 -t {dur} -i "{tmp_png}" '
+                            f'-vf "scale={res},fps={fps}" '
+                            f'{codec_flags} "{seg_path}"'
+                        )
+                        proc = self._run_ffmpeg_logged(cmd, f"Segment {idx+1}/{total}: {name}")
+                        self._output_proc = proc
+                        if proc:
+                            proc.wait()
+
                     if self._output_proc == "STOPPED":
-                        break
-                    self.after(0, lambda n=name, i=idx: self._tb_output_status.config(
-                        text=f"💾 Exportiere {i+1}/{total}: {n}…"))
+                        for f in tmp_files:
+                            try: os.unlink(f)
+                            except: pass
+                        self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
+                        self.after(0, lambda: self._tb_output_status.config(text="⏹ Export abgebrochen"))
+                        return
 
+                    # Schritt 2: Alle Segmente mit concat zusammenfügen
+                    self.after(0, lambda: self._tb_output_status.config(
+                        text=f"🔗 Füge {total} Segmente zusammen…"))
+
+                    concat_list = os.path.join(_tmp.gettempdir(), "vidcal_concat.txt")
+                    with open(concat_list, "w") as cf:
+                        for sp in segment_paths:
+                            cf.write(f"file '{sp}'\n")
+                    tmp_files.append(concat_list)
+
+                    concat_cmd = (
+                        f'"{ffmpeg}" -y -f concat -safe 0 -i "{concat_list}" '
+                        f'-c copy "{out_path}"'
+                    )
+                    proc = self._run_ffmpeg_logged(concat_cmd, "Concat → finale Datei")
+                    self._output_proc = proc
+                    if proc:
+                        proc.wait()
+
+                    # Aufräumen
+                    for f in tmp_files:
+                        try: os.unlink(f)
+                        except: pass
+
+                    self._output_proc = None
+                    self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
+                    self.after(0, lambda: self._tb_output_status.config(
+                        text=f"✅ Sequenz exportiert → {os.path.basename(out_path)}"))
+                    self.after(0, lambda: messagebox.showinfo("Export abgeschlossen",
+                        f"✅ Sequenz exportiert:\n{out_path}\n\n"
+                        f"Inhalt: {total} Testbilder × {dur}s = {total*dur}s Gesamtdauer"))
+
+                self._output_proc = None
+                self._output_thread = threading.Thread(target=run_sequence_export, daemon=True)
+                self._output_thread.start()
+
+            else:
+                # ── EINZELBILD als Video ─────────────────────────────────────
+                out_path = os.path.join(out_dir,
+                    f"VidCal_{testbilder[0][0]}_{res}_{ts}{real_ext}")
+
+                self._show_log()
+                self._tb_stop_btn.config(state="normal")
+
+                def run_single_export():
+                    import tempfile as _tmp
+                    name, gen_fn = testbilder[0]
                     frame = gen_fn()
-                    tmp_png = os.path.join(_tmp.gettempdir(), f"vidcal_export_{name}.png")
+                    tmp_png = os.path.join(_tmp.gettempdir(), "vidcal_single_export.png")
                     cv2.imwrite(tmp_png, frame)
-
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_path = os.path.join(out_dir, f"VidCal_{name}_{res}_{ts}{real_ext}")
 
                     cmd = (
                         f'"{ffmpeg}" -y -loop 1 -t {dur} -i "{tmp_png}" '
@@ -1473,21 +1563,19 @@ class VidCal(tk.Tk):
                     self._output_proc = proc
                     if proc:
                         proc.wait()
-                    try:
-                        os.unlink(tmp_png)
-                    except:
-                        pass
+                    try: os.unlink(tmp_png)
+                    except: pass
+
+                    self._output_proc = None
+                    self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
+                    self.after(0, lambda: self._tb_output_status.config(
+                        text=f"✅ Exportiert → {os.path.basename(out_path)}"))
+                    self.after(0, lambda: messagebox.showinfo("Export abgeschlossen",
+                        f"✅ Exportiert:\n{out_path}"))
 
                 self._output_proc = None
-                self.after(0, lambda: self._tb_stop_btn.config(state="disabled"))
-                self.after(0, lambda: self._tb_output_status.config(
-                    text=f"✅ Export abgeschlossen → {out_dir}"))
-                self.after(0, lambda: messagebox.showinfo("Export abgeschlossen",
-                    f"✅ {total} Datei(en) exportiert nach:\n{out_dir}"))
-
-            self._output_proc = None
-            self._output_thread = threading.Thread(target=run_export, daemon=True)
-            self._output_thread.start()
+                self._output_thread = threading.Thread(target=run_single_export, daemon=True)
+                self._output_thread.start()
 
     # ── Tab 2: Analyse ───────────────────────────────────────────────────────
 
